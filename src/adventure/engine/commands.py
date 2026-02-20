@@ -8,37 +8,32 @@ All handlers mutate state in place and return descriptive text.
 import random
 
 from .state import (
+    AXE,
     BEAR,
     BIRD,
     BOTTLE,
     CAGE,
     CARRIED,
     CHAIN,
-    CHASM,
     CLAM,
     DESTROYED,
     DOOR,
     DRAGON,
-    EMERALD,
     FOOD,
     GRATE,
     KEYS,
     LAMP,
-    LAMP_LIFE,
     MAGAZINE,
-    NUGGET,
     OIL,
     OYSTER,
     PILLOW,
     PLANT,
     ROD,
-    ROD2,
     SNAKE,
+    TABLET,
     TROLL,
     VASE,
     WATER,
-    AXE,
-    BATTERIES,
     GameState,
 )
 from .world import World
@@ -130,102 +125,38 @@ ACTION_VERBS = {
 }
 
 
-def handle_command(world: World, state: GameState, raw_input: str) -> str:
-    """Process a command and return the response text."""
-    state.turns += 1
+def _tick_lamp(world: World, state: GameState) -> str | None:
+    """Tick the lamp and return a message if it ran out, else None."""
+    if not state.lamp_on:
+        return None
+    state.lamp_turns -= 1
+    if state.lamp_turns > 0:
+        return None
+    state.lamp_on = False
+    state.object_props[LAMP] = 0
+    if _is_dark(world, state):
+        return (
+            "Your lamp has run out of power.\n\n"
+            "It is now pitch dark. If you proceed you will "
+            "likely fall into a pit."
+        )
+    return "Your lamp has run out of power."
 
-    # Decrease lamp life if lamp is on
-    if state.lamp_on:
-        state.lamp_turns -= 1
-        if state.lamp_turns <= 0:
-            state.lamp_on = False
-            state.object_props[LAMP] = 0
-            if _is_dark(world, state):
-                return (
-                    "Your lamp has run out of power.\n\n"
-                    "It is now pitch dark. If you proceed you will "
-                    "likely fall into a pit."
-                )
-            return "Your lamp has run out of power."
 
-    words = raw_input.strip().lower().split()
-    if not words:
-        return "I beg your pardon?"
-
-    verb = words[0][:5]  # Only first 5 chars matter
-    noun = words[1][:5] if len(words) > 1 else None
-
-    # Check for motion words first
+def _dispatch_verb(
+    world: World, state: GameState, verb: str, noun: str | None,
+) -> str | None:
+    """Try to dispatch verb as a motion word, action verb, or noun shortcut."""
     if verb in MOTION_WORDS or _is_motion_word(world, verb):
         return _cmd_go(world, state, verb)
 
-    # Check for known action verbs
-    if verb in ("take", "get", "carry", "catch", "steal", "captu"):
-        return _cmd_take(world, state, noun)
-    if verb in ("drop", "relea", "disca"):
-        return _cmd_drop(world, state, noun)
-    if verb in ("open", "unloc"):
-        return _cmd_open(world, state, noun)
-    if verb in ("close", "lock"):
-        return _cmd_close(world, state, noun)
-    if verb in ("on", "light"):
-        return _cmd_on(world, state)
-    if verb in ("off", "extin"):
-        return _cmd_off(world, state)
-    if verb in ("look", "l"):
-        return _cmd_look(world, state)
-    if verb in ("inven", "i"):
-        return _cmd_inventory(world, state)
-    if verb in ("score"):
-        return _cmd_score(world, state)
-    if verb in ("quit", "q"):
-        return _cmd_quit(world, state)
-    if verb in ("eat"):
-        return _cmd_eat(world, state, noun)
-    if verb in ("drink"):
-        return _cmd_drink(world, state, noun)
-    if verb in ("throw", "toss"):
-        return _cmd_throw(world, state, noun)
-    if verb in ("pour"):
-        return _cmd_pour(world, state, noun)
-    if verb in ("fill"):
-        return _cmd_fill(world, state, noun)
-    if verb in ("wave"):
-        return _cmd_wave(world, state, noun)
-    if verb in ("kill", "attac", "fight"):
-        return _cmd_attack(world, state, noun)
-    if verb in ("feed"):
-        return _cmd_feed(world, state, noun)
-    if verb in ("read", "perus"):
-        return _cmd_read(world, state, noun)
-    if verb in ("break", "shatt"):
-        return _cmd_break(world, state, noun)
-    if verb in ("find", "where"):
-        return _cmd_find(world, state, noun)
-    if verb in ("say"):
-        word = noun or (words[1] if len(words) > 1 else None)
-        if word:
-            return _cmd_say(world, state, word)
-        return "What do you want to say?"
-    if verb in ("help", "info"):
-        return _cmd_help()
-    if verb in ("swim"):
-        return "I don't know how."
-    if verb in ("nothi"):
-        return "OK."
-    if verb in ("brief"):
-        state.detail_level = 0
-        return "OK, I'll only describe a place in full the first time you come to it."
-    if verb in ("save"):
-        return "Your game is automatically saved after each move."
+    handler = _VERB_DISPATCH.get(verb)
+    if handler is not None:
+        return handler(world, state, noun)
 
-    # Try as a motion word if in vocabulary
-    if verb in world.vocabulary:
-        word = world.vocabulary[verb]
-        if word.kind == "motion":
-            return _cmd_go(world, state, verb)
+    if verb in world.vocabulary and world.vocabulary[verb].kind == "motion":
+        return _cmd_go(world, state, verb)
 
-    # Try if verb is a noun (shortcut: "lamp" means "take lamp" if not carried)
     if noun is None and verb in world.object_names:
         obj_n = world.object_names[verb]
         if state.object_locations.get(obj_n) == CARRIED:
@@ -233,7 +164,27 @@ def handle_command(world: World, state: GameState, raw_input: str) -> str:
         if state.object_locations.get(obj_n) == state.current_room:
             return _cmd_take(world, state, verb)
 
-    return "I don't understand that command."
+    return None
+
+
+def handle_command(world: World, state: GameState, raw_input: str) -> str:
+    """Process a command and return the response text."""
+    state.turns += 1
+
+    lamp_msg = _tick_lamp(world, state)
+    if lamp_msg:
+        return lamp_msg
+
+    words = raw_input.strip().lower().split()
+    if not words:
+        return "I beg your pardon?"
+
+    verb = words[0][:5]
+    noun = words[1][:5] if len(words) > 1 else None
+
+    return _dispatch_verb(world, state, verb, noun) or (
+        "I don't understand that command."
+    )
 
 
 def _is_motion_word(world: World, word: str) -> bool:
@@ -303,9 +254,8 @@ def get_room_description(world: World, state: GameState) -> str:
     ):
         return room.short_description.strip()
 
-    return room.long_description.strip() if room.long_description else (
-        room.short_description.strip() if room.short_description else "You are somewhere."
-    )
+    desc = room.long_description or room.short_description or "You are somewhere."
+    return desc.strip()
 
 
 def get_visible_objects(world: World, state: GameState) -> list[str]:
@@ -325,7 +275,8 @@ def get_visible_objects(world: World, state: GameState) -> list[str]:
                 descriptions.append(msg.strip())
             elif obj.inventory_message:
                 # Use inventory message as fallback for ground description
-                descriptions.append(f"There is a {obj.names[0]} here." if obj.names else "")
+                if obj.names:
+                    descriptions.append(f"There is a {obj.names[0]} here.")
     return [d for d in descriptions if d]
 
 
@@ -384,31 +335,57 @@ def get_inventory(world: World, state: GameState) -> list[str]:
     return items
 
 
+def _resolve_direction(world: World, direction: str) -> int | None:
+    """Resolve a direction string to a verb number."""
+    direction = direction[:5].lower()
+    verb_n = MOTION_WORDS.get(direction)
+    if verb_n is not None:
+        return verb_n
+    if direction in world.vocabulary:
+        word = world.vocabulary[direction]
+        if word.kind == "motion":
+            return word.number
+    return None
+
+
+def _move_to(world: World, state: GameState, dest: int) -> str:
+    """Move the player to dest and handle forced movement / dark death."""
+    state.old_old_room = state.old_room
+    state.old_room = state.current_room
+    state.current_room = dest
+    state.visited_rooms.add(dest)
+
+    new_room = world.rooms.get(dest)
+    if new_room and new_room.travel_table and new_room.travel_table[0].is_forced:
+        forced = new_room.travel_table[0]
+        if 0 < forced.destination <= 300:
+            msg = get_room_description(world, state)
+            state.old_room = state.current_room
+            state.current_room = forced.destination
+            state.visited_rooms.add(forced.destination)
+            return msg + "\n\n" + get_room_description(world, state)
+        if forced.destination < 0:
+            return world.messages.get(-forced.destination, "")
+
+    if _is_dark(world, state) and random.random() < 0.35:
+        return _cmd_die(world, state)
+
+    return get_room_description(world, state)
+
+
 def _cmd_go(world: World, state: GameState, direction: str) -> str:
     """Handle movement commands."""
     room = world.rooms.get(state.current_room)
     if room is None:
         return "You can't go that way."
 
-    # Find the verb number for this direction
-    direction = direction[:5].lower()
-    verb_n = MOTION_WORDS.get(direction)
-    if verb_n is None and direction in world.vocabulary:
-        word = world.vocabulary[direction]
-        if word.kind == "motion":
-            verb_n = word.number
-
+    verb_n = _resolve_direction(world, direction)
     if verb_n is None:
         return "I don't know that direction."
 
     # Special: "back"
     if verb_n == 8:
-        dest = state.old_room
-        state.old_old_room = state.old_room
-        state.old_room = state.current_room
-        state.current_room = dest
-        state.visited_rooms.add(dest)
-        return get_room_description(world, state)
+        return _move_to(world, state, state.old_room)
 
     # Special: "look"
     if verb_n == 57:
@@ -418,47 +395,15 @@ def _cmd_go(world: World, state: GameState, direction: str) -> str:
     for move in room.travel_table:
         if verb_n not in move.verbs and not move.is_forced:
             continue
-
-        # Check conditions
         if not _check_condition(world, state, move.condition):
             continue
 
         dest = move.destination
-
-        # Destination is a message (negative = message number)
         if dest < 0:
-            msg_n = -dest
-            return world.messages.get(msg_n, "You can't go that way.")
-
-        # Destination 301-500 are special actions
+            return world.messages.get(-dest, "You can't go that way.")
         if 301 <= dest <= 500:
             return _handle_special_movement(world, state, dest)
-
-        # Normal room movement
-        state.old_old_room = state.old_room
-        state.old_room = state.current_room
-        state.current_room = dest
-        state.visited_rooms.add(dest)
-
-        # Check for forced movement
-        new_room = world.rooms.get(dest)
-        if new_room and new_room.travel_table and new_room.travel_table[0].is_forced:
-            forced = new_room.travel_table[0]
-            if forced.destination > 0 and forced.destination <= 300:
-                msg = get_room_description(world, state)
-                state.old_room = state.current_room
-                state.current_room = forced.destination
-                state.visited_rooms.add(forced.destination)
-                return msg + "\n\n" + get_room_description(world, state)
-            elif forced.destination < 0:
-                msg = world.messages.get(-forced.destination, "")
-                return msg
-
-        # Check for death in dark
-        if _is_dark(world, state) and random.random() < 0.35:
-            return _cmd_die(world, state)
-
-        return get_room_description(world, state)
+        return _move_to(world, state, dest)
 
     return "You can't go that way."
 
@@ -517,6 +462,27 @@ def _cmd_die(world: World, state: GameState) -> str:
     )
 
 
+def _take_special(state: GameState, obj_n: int) -> str | None:
+    """Handle special take logic for bird and liquids. Returns message or None."""
+    if obj_n == BIRD:
+        if _is_carrying(state, ROD):
+            return "The bird is frightened by the rod and you cannot catch it."
+        if not _is_carrying(state, CAGE):
+            return "You can catch the bird, but you cannot carry it."
+        state.object_locations[BIRD] = CARRIED
+        state.object_props[BIRD] = 1  # in cage
+        return "You catch the bird in the cage."
+
+    if obj_n in (WATER, OIL):
+        if not _is_carrying(state, BOTTLE):
+            return "You have nothing in which to carry it."
+        state.object_locations[obj_n] = CARRIED
+        state.object_props[BOTTLE] = 1 if obj_n == WATER else 2
+        return "Your bottle is now full."
+
+    return None
+
+
 def _cmd_take(world: World, state: GameState, noun: str | None) -> str:
     """Handle TAKE/GET commands."""
     if noun is None:
@@ -539,22 +505,9 @@ def _cmd_take(world: World, state: GameState, noun: str | None) -> str:
     if _is_dark(world, state):
         return "It's too dark to see!"
 
-    # Special cases
-    if obj_n == BIRD:
-        if _is_carrying(state, ROD):
-            return "The bird is frightened by the rod and you cannot catch it."
-        if not _is_carrying(state, CAGE):
-            return "You can catch the bird, but you cannot carry it."
-        state.object_locations[BIRD] = CARRIED
-        state.object_props[BIRD] = 1  # in cage
-        return "You catch the bird in the cage."
-
-    if obj_n == WATER or obj_n == OIL:
-        if not _is_carrying(state, BOTTLE):
-            return "You have nothing in which to carry it."
-        state.object_locations[obj_n] = CARRIED
-        state.object_props[BOTTLE] = 1 if obj_n == WATER else 2
-        return "Your bottle is now full."
+    special = _take_special(state, obj_n)
+    if special:
+        return special
 
     if _carried_count(state) >= 7:
         return "You can't carry any more. Try dropping something first."
@@ -598,6 +551,41 @@ def _cmd_drop(world: World, state: GameState, noun: str | None) -> str:
     return "OK."
 
 
+def _open_grate(state: GameState) -> str:
+    if not _is_here(state, KEYS):
+        return "You have no keys!"
+    state.object_props[GRATE] = 1
+    return "The grate is now open."
+
+
+def _open_clam(state: GameState) -> str:
+    if not _is_carrying(state, CLAM):
+        return "I advise you to put down the clam before opening it. >STRAIN!<"
+    state.object_locations[CLAM] = DESTROYED
+    state.object_locations[OYSTER] = state.current_room
+    return "A glistening pearl falls out of the clam and rolls away!"
+
+
+def _open_chain(state: GameState) -> str:
+    if not _is_here(state, KEYS):
+        return "You have no keys!"
+    state.object_props[CHAIN] = 0
+    state.object_locations[CHAIN] = state.current_room
+    if _is_here(state, BEAR):
+        state.object_props[BEAR] = 1
+        state.bear_tame = True
+    return "The chain is now unlocked."
+
+
+_OPEN_HANDLERS: dict[int, callable] = {
+    DOOR: lambda _: "The door is extremely rusty and refuses to open.",
+    OYSTER: lambda _: "The oyster creaks open, revealing nothing inside.",
+    GRATE: lambda s: _open_grate(s),
+    CLAM: lambda s: _open_clam(s),
+    CHAIN: lambda s: _open_chain(s),
+}
+
+
 def _cmd_open(world: World, state: GameState, noun: str | None) -> str:
     """Handle OPEN/UNLOCK commands."""
     if noun is None:
@@ -607,34 +595,9 @@ def _cmd_open(world: World, state: GameState, noun: str | None) -> str:
     if obj_n is None:
         return f"I don't know what '{noun}' is."
 
-    if obj_n == GRATE:
-        if not _is_here(state, KEYS):
-            return "You have no keys!"
-        state.object_props[GRATE] = 1  # open
-        return "The grate is now open."
-
-    if obj_n == DOOR:
-        return "The door is extremely rusty and refuses to open."
-
-    if obj_n == CLAM:
-        if not _is_carrying(state, CLAM):
-            return "I advise you to put down the clam before opening it. >STRAIN!<"
-        state.object_locations[CLAM] = DESTROYED
-        state.object_locations[OYSTER] = state.current_room
-        return "A glistening pearl falls out of the clam and rolls away!"
-
-    if obj_n == OYSTER:
-        return "The oyster creaks open, revealing nothing inside."
-
-    if obj_n == CHAIN:
-        if not _is_here(state, KEYS):
-            return "You have no keys!"
-        state.object_props[CHAIN] = 0
-        state.object_locations[CHAIN] = state.current_room
-        if _is_here(state, BEAR):
-            state.object_props[BEAR] = 1
-            state.bear_tame = True
-        return "The chain is now unlocked."
+    handler = _OPEN_HANDLERS.get(obj_n)
+    if handler:
+        return handler(state)
 
     return "I don't know how to open that."
 
@@ -655,7 +618,7 @@ def _cmd_close(world: World, state: GameState, noun: str | None) -> str:
     return "I don't know how to close that."
 
 
-def _cmd_on(world: World, state: GameState) -> str:
+def _cmd_on(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle ON/LIGHT commands."""
     if not _is_here(state, LAMP):
         return "You have no source of light."
@@ -668,7 +631,7 @@ def _cmd_on(world: World, state: GameState) -> str:
     return "Your lamp is now on.\n\n" + get_room_description(world, state)
 
 
-def _cmd_off(world: World, state: GameState) -> str:
+def _cmd_off(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle OFF/EXTINGUISH commands."""
     if not _is_here(state, LAMP):
         return "You have no source of light."
@@ -677,7 +640,7 @@ def _cmd_off(world: World, state: GameState) -> str:
     return "Your lamp is now off."
 
 
-def _cmd_look(world: World, state: GameState) -> str:
+def _cmd_look(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle LOOK command."""
     state.detail_level += 1
     room = world.rooms.get(state.current_room)
@@ -687,12 +650,11 @@ def _cmd_look(world: World, state: GameState) -> str:
     if _is_dark(world, state):
         return "It is now pitch dark. If you proceed you will likely fall into a pit."
 
-    return room.long_description.strip() if room.long_description else (
-        room.short_description.strip() if room.short_description else "You are somewhere."
-    )
+    desc = room.long_description or room.short_description or "You are somewhere."
+    return desc.strip()
 
 
-def _cmd_inventory(world: World, state: GameState) -> str:
+def _cmd_inventory(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle INVENTORY command."""
     items = get_inventory(world, state)
     if not items:
@@ -703,13 +665,13 @@ def _cmd_inventory(world: World, state: GameState) -> str:
     return result.strip()
 
 
-def _cmd_score(world: World, state: GameState) -> str:
+def _cmd_score(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle SCORE command."""
     score = calculate_score(world, state)
     return f"Your current score is {score} out of a possible 350."
 
 
-def _cmd_quit(world: World, state: GameState) -> str:
+def _cmd_quit(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle QUIT command."""
     state.is_finished = True
     state.gave_up = True
@@ -795,7 +757,6 @@ def _cmd_wave(world: World, state: GameState, noun: str | None) -> str:
     """Handle WAVE command."""
     obj_n = _resolve_noun(world, state, noun)
     if obj_n == ROD and _is_carrying(state, ROD):
-        room = world.rooms.get(state.current_room)
         # Waving rod at fissure
         if state.current_room == 17 or state.current_room == 27:
             prop = state.object_props.get(12, 0)  # fissure
@@ -836,7 +797,7 @@ def _cmd_attack(world: World, state: GameState, noun: str | None) -> str:
         if state.object_props.get(DRAGON, 0) != 0:
             return "The dragon is already dead."
         state.object_props[DRAGON] = 1  # dead
-        state.object_props[DRAGON + 100] = 0 if (DRAGON + 100) in state.object_props else 0
+        state.object_props[DRAGON + 100] = 0
         return (
             "With what? Your bare hands?\n\n"
             "Congratulations! You have just vanquished a dragon "
@@ -853,7 +814,10 @@ def _cmd_attack(world: World, state: GameState, noun: str | None) -> str:
         return "I see no bird here."
 
     if obj_n == TROLL:
-        return "Trolls are close relatives with the rocks and have skin as tough as stone."
+        return (
+            "Trolls are close relatives with the rocks "
+            "and have skin as tough as stone."
+        )
 
     if obj_n == BEAR:
         if state.bear_tame:
@@ -900,7 +864,10 @@ def _cmd_read(world: World, state: GameState, noun: str | None) -> str:
     obj_n = _resolve_noun(world, state, noun)
 
     if obj_n == MAGAZINE and _is_here(state, MAGAZINE):
-        return 'The magazine is written in dwarvish. The only thing you can make out is "STRSTRSTR".'
+        return (
+            "The magazine is written in dwarvish. "
+            'The only thing you can make out is "STRSTRSTR".'
+        )
     if obj_n == TABLET and _is_here(state, TABLET):
         return '"CONGRATULATIONS ON BRINGING LIGHT INTO THE DARK-ROOM!"'
     if obj_n == OYSTER and _is_here(state, OYSTER):
@@ -933,15 +900,23 @@ def _cmd_find(world: World, state: GameState, noun: str | None) -> str:
     return "I have no idea where it is."
 
 
-def _cmd_say(world: World, state: GameState, word: str) -> str:
+def _cmd_say(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle SAY command."""
-    word = word.lower()[:5]
+    if not noun:
+        return "What do you want to say?"
+    word = noun.lower()[:5]
     if word in ("xyzzy", "plugh", "plove"):
         return _cmd_go(world, state, word)
     return f'OK, "{word}".'
 
 
-def _cmd_help() -> str:
+def _cmd_brief(world: World, state: GameState, noun: str | None = None) -> str:
+    """Handle BRIEF command."""
+    state.detail_level = 0
+    return "OK, I'll only describe a place in full the first time you come to it."
+
+
+def _cmd_help(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle HELP command."""
     return (
         "I know of places, actions, and things. Most of my vocabulary\n"
@@ -982,3 +957,43 @@ def calculate_score(world: World, state: GameState) -> int:
         score += 4
 
     return score
+
+
+def _static_response(msg: str):
+    """Return a handler that ignores all arguments and returns a fixed message."""
+    def handler(world: World, state: GameState, noun: str | None = None) -> str:
+        return msg
+    return handler
+
+
+_VERB_DISPATCH: dict[str, callable] = {
+    **dict.fromkeys(("take", "get", "carry", "catch", "steal", "captu"), _cmd_take),
+    **dict.fromkeys(("drop", "relea", "disca"), _cmd_drop),
+    **dict.fromkeys(("open", "unloc"), _cmd_open),
+    **dict.fromkeys(("close", "lock"), _cmd_close),
+    **dict.fromkeys(("on", "light"), _cmd_on),
+    **dict.fromkeys(("off", "extin"), _cmd_off),
+    **dict.fromkeys(("look", "l"), _cmd_look),
+    **dict.fromkeys(("inven", "i"), _cmd_inventory),
+    **dict.fromkeys(("quit", "q"), _cmd_quit),
+    **dict.fromkeys(("throw", "toss"), _cmd_throw),
+    **dict.fromkeys(("kill", "attac", "fight"), _cmd_attack),
+    **dict.fromkeys(("read", "perus"), _cmd_read),
+    **dict.fromkeys(("break", "shatt"), _cmd_break),
+    **dict.fromkeys(("find", "where"), _cmd_find),
+    **dict.fromkeys(("help", "info"), _cmd_help),
+    "score": _cmd_score,
+    "eat": _cmd_eat,
+    "drink": _cmd_drink,
+    "pour": _cmd_pour,
+    "fill": _cmd_fill,
+    "wave": _cmd_wave,
+    "feed": _cmd_feed,
+    "say": _cmd_say,
+    "brief": _cmd_brief,
+    "swim": _static_response("I don't know how."),
+    "nothi": _static_response("OK."),
+    "save": _static_response(
+        "Your game is automatically saved after each move."
+    ),
+}

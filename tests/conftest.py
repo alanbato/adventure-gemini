@@ -51,8 +51,8 @@ def test_config(tmp_path: Path) -> Config:
 
 @pytest.fixture
 def app(test_config: Config, data_dir: Path):
-    from adventure.app import create_app, DATA_DIR
     import adventure.app as app_module
+    from adventure.app import create_app
 
     original = app_module.DATA_DIR
     app_module.DATA_DIR = data_dir

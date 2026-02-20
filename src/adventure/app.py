@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from sqlmodel import SQLModel, Session, create_engine
+from sqlmodel import Session, SQLModel, create_engine
 from xitzin import Xitzin
 
 from .config import Config

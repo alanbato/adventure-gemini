@@ -249,6 +249,28 @@ def _parse_section12(world: World, fields: list) -> None:
         world.magic_messages[n] = text
 
 
+def _parse_fields(line: str) -> list:
+    """Parse a tab-delimited line into typed fields (int or str)."""
+    fields = []
+    for field in line.split("\t"):
+        stripped = field.strip()
+        if stripped.lstrip("-").isdigit():
+            fields.append(int(stripped))
+        else:
+            fields.append(field)
+    return fields
+
+
+def _read_section(f, parser) -> None:
+    """Read lines until sentinel (-1) and dispatch each to parser."""
+    while True:
+        line = f.readline().rstrip("\n")
+        fields = _parse_fields(line)
+        if fields[0] == -1:
+            break
+        parser(fields)
+
+
 def load_world(data_path: Path) -> World:
     """Parse advent.dat and return a populated World."""
     world = World()
@@ -270,9 +292,9 @@ def load_world(data_path: Path) -> World:
         12: lambda f: _parse_section12(world, f),
     }
 
-    with open(data_path) as f:
+    with open(data_path) as fh:
         while True:
-            line = f.readline()
+            line = fh.readline()
             if not line:
                 break
             section_number = int(line.strip())
@@ -283,26 +305,6 @@ def load_world(data_path: Path) -> World:
             if parser is None:
                 continue
 
-            while True:
-                line = f.readline().rstrip("\n")
-                raw_fields = line.split("\t")
-                fields = []
-                for field in raw_fields:
-                    stripped = field.strip()
-                    if stripped.lstrip("-").isdigit():
-                        fields.append(int(stripped))
-                    else:
-                        fields.append(field)
-
-                if fields[0] == -1:
-                    break
-                parser(fields)
-
-    # Section 11 hint messages reference section 6 messages that may have
-    # been parsed after section 11 fields were read. Re-resolve them.
-    for hint in world.hints.values():
-        if not hint.question and hint.turns_needed > 0:
-            # hints were defined but messages not yet resolved
-            pass
+            _read_section(fh, parser)
 
     return world

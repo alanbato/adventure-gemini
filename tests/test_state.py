@@ -3,7 +3,7 @@
 import pickle
 import zlib
 
-from adventure.engine.state import CARRIED, LAMP, KEYS, START_ROOM, GameState, new_game_state
+from adventure.engine.state import CARRIED, KEYS, LAMP, START_ROOM, new_game_state
 from adventure.engine.world import World
 
 

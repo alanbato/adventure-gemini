@@ -7,7 +7,10 @@ def test_loads_rooms(world: World):
     """Parser loads rooms from sections 1 and 2."""
     assert len(world.rooms) > 0
     room_1 = world.rooms[1]
-    assert "ROAD" in room_1.short_description.upper() or "END OF A ROAD" in room_1.long_description.upper()
+    assert (
+        "ROAD" in room_1.short_description.upper()
+        or "END OF A ROAD" in room_1.long_description.upper()
+    )
     assert room_1.long_description
 
 
