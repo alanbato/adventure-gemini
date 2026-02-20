@@ -287,7 +287,7 @@ def get_visible_objects(world: World, state: GameState) -> list[str]:
                 # Use inventory message as fallback for ground description
                 if obj.names:
                     descriptions.append(f"There is a {obj.names[0]} here.")
-    return [d for d in descriptions if d]
+    return descriptions
 
 
 def get_exits(world: World, state: GameState) -> list[str]:
@@ -461,7 +461,7 @@ def _cmd_die(world: World, state: GameState) -> str:
     state.current_room = 3  # building
     state.old_room = 3
     # Drop all carried items at the building
-    for obj_id in list(state.object_locations.keys()):
+    for obj_id in list(state.object_locations):
         if state.object_locations[obj_id] == CARRIED:
             state.object_locations[obj_id] = 3  # drop in building
     state.lamp_on = False
@@ -493,7 +493,7 @@ def _take_special(state: GameState, obj_n: int) -> str | None:
     return None
 
 
-def _cmd_take(world: World, state: GameState, noun: str | None) -> str:
+def _cmd_take(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle TAKE/GET commands."""
     if noun is None:
         return "What do you want to take?"
@@ -526,7 +526,7 @@ def _cmd_take(world: World, state: GameState, noun: str | None) -> str:
     return "OK."
 
 
-def _cmd_drop(world: World, state: GameState, noun: str | None) -> str:
+def _cmd_drop(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle DROP commands."""
     if noun is None:
         return "What do you want to drop?"
@@ -596,7 +596,7 @@ _OPEN_HANDLERS: dict[int, Callable] = {
 }
 
 
-def _cmd_open(world: World, state: GameState, noun: str | None) -> str:
+def _cmd_open(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle OPEN/UNLOCK commands."""
     if noun is None:
         return "What do you want to open?"
@@ -612,7 +612,7 @@ def _cmd_open(world: World, state: GameState, noun: str | None) -> str:
     return "I don't know how to open that."
 
 
-def _cmd_close(world: World, state: GameState, noun: str | None) -> str:
+def _cmd_close(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle CLOSE/LOCK commands."""
     if noun is None:
         return "What do you want to close?"
@@ -689,7 +689,7 @@ def _cmd_quit(world: World, state: GameState, noun: str | None = None) -> str:
     return f"You scored {score} out of a possible 350. Thanks for playing!"
 
 
-def _cmd_eat(world: World, state: GameState, noun: str | None) -> str:
+def _cmd_eat(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle EAT command."""
     if noun is None:
         return "What do you want to eat?"
@@ -697,12 +697,12 @@ def _cmd_eat(world: World, state: GameState, noun: str | None) -> str:
     if obj_n == FOOD:
         state.object_locations[FOOD] = DESTROYED
         return "Thank you, it was delicious!"
-    if obj_n == BIRD or obj_n == SNAKE:
+    if obj_n in (BIRD, SNAKE):
         return "I think I just lost my appetite."
     return "That's not something I'd want to eat."
 
 
-def _cmd_drink(world: World, state: GameState, noun: str | None) -> str:
+def _cmd_drink(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle DRINK command."""
     if noun is None or _normalize_word(noun) == "water":
         if _is_carrying(state, WATER):
@@ -716,7 +716,7 @@ def _cmd_drink(world: World, state: GameState, noun: str | None) -> str:
     return "That's not something you can drink."
 
 
-def _cmd_pour(world: World, state: GameState, noun: str | None) -> str:
+def _cmd_pour(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle POUR command."""
     if not _is_carrying(state, BOTTLE):
         return "You aren't carrying it!"
@@ -746,7 +746,7 @@ def _cmd_pour(world: World, state: GameState, noun: str | None) -> str:
     return "Your bottle is empty."
 
 
-def _cmd_fill(world: World, state: GameState, noun: str | None) -> str:
+def _cmd_fill(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle FILL command."""
     if noun and _normalize_word(noun) == "bottl":
         if not _is_carrying(state, BOTTLE):
@@ -763,7 +763,7 @@ def _cmd_fill(world: World, state: GameState, noun: str | None) -> str:
     return "You can't fill that."
 
 
-def _cmd_wave(world: World, state: GameState, noun: str | None) -> str:
+def _cmd_wave(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle WAVE command."""
     obj_n = _resolve_noun(world, state, noun)
     if obj_n == ROD and _is_carrying(state, ROD):
@@ -778,7 +778,7 @@ def _cmd_wave(world: World, state: GameState, noun: str | None) -> str:
     return "Nothing happens."
 
 
-def _cmd_throw(world: World, state: GameState, noun: str | None) -> str:
+def _cmd_throw(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle THROW command."""
     if noun is None:
         return "What do you want to throw?"
@@ -834,7 +834,7 @@ _ATTACK_HANDLERS: dict[int, Callable] = {
 }
 
 
-def _cmd_attack(world: World, state: GameState, noun: str | None) -> str:
+def _cmd_attack(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle KILL/ATTACK commands."""
     if noun is None:
         return "What do you want to attack?"
@@ -870,7 +870,7 @@ _FEED_HANDLERS: dict[int, Callable] = {
 }
 
 
-def _cmd_feed(world: World, state: GameState, noun: str | None) -> str:
+def _cmd_feed(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle FEED command."""
     if noun is None:
         return "What do you want to feed?"
@@ -891,7 +891,7 @@ _READABLE_MESSAGES: dict[int, str] = {
 }
 
 
-def _cmd_read(world: World, state: GameState, noun: str | None) -> str:
+def _cmd_read(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle READ command."""
     if _is_dark(world, state):
         return "It's too dark to read!"
@@ -906,7 +906,7 @@ def _cmd_read(world: World, state: GameState, noun: str | None) -> str:
     return "I see nothing to read here."
 
 
-def _cmd_break(world: World, state: GameState, noun: str | None) -> str:
+def _cmd_break(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle BREAK command."""
     obj_n = _resolve_noun(world, state, noun)
     if obj_n == VASE and _is_here(state, VASE):
@@ -916,7 +916,7 @@ def _cmd_break(world: World, state: GameState, noun: str | None) -> str:
     return "It is beyond your power to do that."
 
 
-def _cmd_find(world: World, state: GameState, noun: str | None) -> str:
+def _cmd_find(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle FIND/WHERE command."""
     if noun is None:
         return "What do you want to find?"
@@ -964,10 +964,12 @@ def calculate_score(world: World, state: GameState) -> int:
 
     # Points for treasures stored safely in building (room 3)
     for obj_id, obj in world.objects.items():
-        if obj.is_treasure and state.object_locations.get(obj_id) == 3:
-            score += 12
-        elif obj.is_treasure and _is_carrying(state, obj_id):
-            score += 2
+        if obj.is_treasure:
+            loc = state.object_locations.get(obj_id)
+            if loc == 3:
+                score += 12
+            elif loc == CARRIED:
+                score += 2
 
     # Points for survival and exploration
     score += max(0, state.deaths * -10)
@@ -977,9 +979,7 @@ def calculate_score(world: World, state: GameState) -> int:
     score += min(deep_rooms, 25)
 
     # Getting into cave
-    if state.current_room >= 15 or any(
-        r >= 15 for r in state.visited_rooms
-    ):
+    if any(r >= 15 for r in state.visited_rooms):
         score += 25
 
     # Bonus for not quitting

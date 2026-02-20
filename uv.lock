@@ -813,7 +813,7 @@ wheels = [
 
 [[package]]
 name = "xitzin"
-version = "0.7.0"
+version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jinja2" },
@@ -822,9 +822,9 @@ dependencies = [
     { name = "structlog" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b3/dc/235152a7c068756c1a0ffa5fe5a34a0389bb0bdc02a3caee08bcd3a691e0/xitzin-0.7.0.tar.gz", hash = "sha256:bf85d1148a107b1e2bbe039fb329c563273f597918b7e6cb7c794e982755a51b", size = 39593, upload-time = "2026-02-05T15:47:56.956Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/99/34/ceadb562ba0cebe2fee8ecb1f3b0febb33d8faec3e7af4377c3395c13ab2/xitzin-0.8.0.tar.gz", hash = "sha256:2617dab7062420761494e4410616abb556f3c42a43124b68effaef7681790888", size = 39598, upload-time = "2026-02-20T16:19:07.081Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/1c/e193c412039a0377e6a120bbf184f291fbdae8879c179d7ee8525ab0bd4d/xitzin-0.7.0-py3-none-any.whl", hash = "sha256:8bcdba332f13b740fc5986c5701b50cf9bd75cb435c8929959f7b1a15be71cd1", size = 47523, upload-time = "2026-02-05T15:47:55.832Z" },
+    { url = "https://files.pythonhosted.org/packages/86/a1/f95cc945636143c77eaa23089ff0d5b41688dfb10af05f8efce93012d9c9/xitzin-0.8.0-py3-none-any.whl", hash = "sha256:b739f6f2956919c1973e52cb166a1297f4ab6d8fefba932005d0a81f43bb980e", size = 47531, upload-time = "2026-02-20T16:19:05.522Z" },
 ]
 
 [package.optional-dependencies]

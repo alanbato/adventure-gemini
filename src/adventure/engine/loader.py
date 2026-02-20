@@ -141,6 +141,9 @@ def _parse_section4(world: World, fields: list) -> None:
             obj.names.append(text)
         obj.is_treasure = obj_n >= 50
         world.object_names[text] = obj_n
+        truncated = text[:5]
+        if truncated not in world.object_names:
+            world.object_names[truncated] = obj_n
 
 
 def _parse_section5(world: World, fields: list, current_obj: list) -> None:

@@ -9,6 +9,8 @@
 {% endfor %}
 {% endif %}
 {% if message %}
+
+---
 > {{ message }}
 {% endif %}
 {% if not is_finished %}

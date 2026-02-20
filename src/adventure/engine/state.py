@@ -56,6 +56,9 @@ TRIDENT = 57
 # Maximum lamp turns
 LAMP_LIFE = 330
 
+# Dwarf starting positions (rooms)
+DWARF_START_LOCATIONS = [19, 27, 33, 44, 64]
+
 
 @dataclass
 class GameState:
@@ -127,8 +130,8 @@ def new_game_state(world: World) -> GameState:
     state.object_props[LAMP] = 0  # off
 
     # Initialize dwarves at their starting locations
-    state.dwarf_locations = [19, 27, 33, 44, 64]
-    state.dwarf_old_locations = [19, 27, 33, 44, 64]
+    state.dwarf_locations = DWARF_START_LOCATIONS.copy()
+    state.dwarf_old_locations = DWARF_START_LOCATIONS.copy()
     state.pirate_location = 0  # pirate not yet active
 
     return state
