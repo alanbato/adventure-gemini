@@ -8,6 +8,7 @@ All handlers mutate state in place and return descriptive text.
 import random
 from collections.abc import Callable
 
+from .loader import LONG_WORDS
 from .state import (
     AXE,
     BEAR,
@@ -48,38 +49,10 @@ def _normalize_word(word: str) -> str:
     return word[:WORD_LENGTH]
 
 
-# Motion word numbers (from section 4 of advent.dat)
-# These map to verb numbers in the vocabulary
-MOTION_WORDS = {
-    "north": 43,
-    "south": 44,
-    "east": 45,
-    "west": 46,
-    "ne": 47,
-    "se": 48,
-    "sw": 49,
-    "nw": 50,
-    "up": 29,
-    "down": 30,
-    "left": 36,
-    "right": 37,
-    "in": 19,
-    "out": 11,
-    "back": 8,
-    "look": 57,
-    "cross": 39,
-    "climb": 56,
-    "jump": 39,
-    "xyzzy": 62,
-    "plugh": 63,
-    "plover": 65,
-    "n": 43,
-    "s": 44,
-    "e": 45,
-    "w": 46,
-    "u": 29,
-    "d": 30,
-}
+# Special verb number for "back" (checked explicitly in _cmd_go)
+BACK_VERB = 8
+# Special verb number for "look" (checked explicitly in _cmd_go)
+LOOK_VERB = 57
 
 # Action verbs
 ACTION_VERBS = {
@@ -157,15 +130,12 @@ def _dispatch_verb(
     world: World, state: GameState, verb: str, noun: str | None,
 ) -> str | None:
     """Try to dispatch verb as a motion word, action verb, or noun shortcut."""
-    if verb in MOTION_WORDS or _is_motion_word(world, verb):
+    if _is_motion_word(world, verb):
         return _cmd_go(world, state, verb)
 
     handler = _VERB_DISPATCH.get(verb)
     if handler is not None:
         return handler(world, state, noun)
-
-    if verb in world.vocabulary and world.vocabulary[verb].kind == "motion":
-        return _cmd_go(world, state, verb)
 
     if noun is None and verb in world.object_names:
         obj_n = world.object_names[verb]
@@ -199,19 +169,31 @@ def handle_command(world: World, state: GameState, raw_input: str) -> str:
 
 def _is_motion_word(world: World, word: str) -> bool:
     """Check if a word is a motion verb in the vocabulary."""
-    if word in world.vocabulary:
-        return world.vocabulary[word].kind == "motion"
-    return False
+    entry = _vocab_lookup(world, word)
+    return entry is not None and entry.kind == "motion"
 
 
 def _resolve_noun(world: World, state: GameState, noun: str | None) -> int | None:
-    """Resolve a noun string to an object number."""
+    """Resolve a noun string to an object number.
+
+    When multiple objects share a name (e.g. two rods), prefer the one
+    that is at the current location or carried by the player.
+    """
     if noun is None:
         return None
     noun = _normalize_word(noun)
-    if noun in world.object_names:
-        return world.object_names[noun]
-    return None
+    default = world.object_names.get(noun)
+    if default is None:
+        return None
+    if _is_here(state, default):
+        return default
+    # Check all objects for a same-name match that IS here.
+    for obj_id, obj in world.objects.items():
+        if obj_id == default:
+            continue
+        if noun in (n[:WORD_LENGTH] for n in obj.names) and _is_here(state, obj_id):
+            return obj_id
+    return default
 
 
 def _is_here(state: GameState, obj_n: int) -> bool:
@@ -290,6 +272,21 @@ def get_visible_objects(world: World, state: GameState) -> list[str]:
     return descriptions
 
 
+def _direction_verb_map(world: World) -> dict[int, str]:
+    """Map vocabulary verb numbers to display names for compass directions."""
+    labels = {
+        "n": "North", "s": "South", "e": "East", "w": "West",
+        "u": "Up", "d": "Down", "in": "In", "out": "Out",
+        "ne": "NE", "se": "SE", "sw": "SW", "nw": "NW",
+    }
+    result: dict[int, str] = {}
+    for short, label in labels.items():
+        entry = _vocab_lookup(world, short)
+        if entry is not None:
+            result[entry.number] = label
+    return result
+
+
 def get_exits(world: World, state: GameState) -> list[str]:
     """Get available exit directions for the current room."""
     if _is_dark(world, state):
@@ -299,24 +296,10 @@ def get_exits(world: World, state: GameState) -> list[str]:
     if room is None:
         return []
 
-    # Map verb numbers to direction names
-    verb_to_name = {
-        43: "North",
-        44: "South",
-        45: "East",
-        46: "West",
-        29: "Up",
-        30: "Down",
-        19: "In",
-        11: "Out",
-        47: "NE",
-        48: "SE",
-        49: "SW",
-        50: "NW",
-    }
+    verb_to_name = _direction_verb_map(world)
 
     exits = []
-    seen_names = set()
+    seen_names: set[str] = set()
     for move in room.travel_table:
         if move.is_forced:
             continue
@@ -345,16 +328,26 @@ def get_inventory(world: World, state: GameState) -> list[str]:
     return items
 
 
+def _vocab_lookup(world: World, word: str):
+    """Look up a word in the vocabulary, trying both the truncated
+    and LONG_WORDS-expanded forms so that 5-char input like 'plove'
+    finds the vocabulary entry stored under 'plover'.
+    """
+    entry = world.vocabulary.get(word)
+    if entry is not None:
+        return entry
+    expanded = LONG_WORDS.get(word)
+    if expanded is not None:
+        return world.vocabulary.get(expanded)
+    return None
+
+
 def _resolve_direction(world: World, direction: str) -> int | None:
-    """Resolve a direction string to a verb number."""
+    """Resolve a direction string to a verb number via the vocabulary."""
     direction = _normalize_word(direction.lower())
-    verb_n = MOTION_WORDS.get(direction)
-    if verb_n is not None:
-        return verb_n
-    if direction in world.vocabulary:
-        word = world.vocabulary[direction]
-        if word.kind == "motion":
-            return word.number
+    entry = _vocab_lookup(world, direction)
+    if entry is not None and entry.kind == "motion":
+        return entry.number
     return None
 
 
@@ -394,11 +387,11 @@ def _cmd_go(world: World, state: GameState, direction: str) -> str:
         return "I don't know that direction."
 
     # Special: "back"
-    if verb_n == 8:
+    if verb_n == BACK_VERB:
         return _move_to(world, state, state.old_room)
 
     # Special: "look"
-    if verb_n == 57:
+    if verb_n == LOOK_VERB:
         return _cmd_look(world, state)
 
     # Walk the travel table
@@ -544,6 +537,7 @@ def _cmd_drop(world: World, state: GameState, noun: str | None = None) -> str:
         # Bird scares snake away
         if _is_at(state, SNAKE, state.current_room):
             state.object_locations[SNAKE] = DESTROYED
+            state.object_props[SNAKE] = 1
             state.object_locations[BIRD] = state.current_room
             return "The little bird attacks the green snake, which flees."
 
