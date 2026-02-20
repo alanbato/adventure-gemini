@@ -1,0 +1,15 @@
+# About
+
+Colossal Cave Adventure was originally written in 1976 by Will Crowther and expanded in 1977 by Don Woods. It is one of the first interactive fiction games and the progenitor of all text adventure games.
+
+This Gemini capsule version uses the original advent.dat data file to faithfully recreate the 350-point version of the game.
+
+## Credits
+
+* Original game: Will Crowther and Don Woods (1977)
+* Data file format: public domain
+* Gemini implementation: Built with xitzin and nauyaca
+* Parsing reference: Brandon Rhodes' python-adventure (Apache 2.0)
+
+=> /play Start Playing
+=> / Home

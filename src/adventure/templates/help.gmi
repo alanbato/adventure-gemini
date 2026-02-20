@@ -1,0 +1,35 @@
+# How to Play
+
+Colossal Cave Adventure is a text adventure game. You explore a vast cave system, collecting treasures and solving puzzles.
+
+## Navigation
+
+Click the direction links (North, South, East, West, Up, Down, In, Out) to move between rooms.
+
+## Commands
+
+Use "Enter a command" to type freeform commands:
+
+* TAKE / GET — pick up an object (e.g., TAKE LAMP)
+* DROP — put down an object
+* OPEN / UNLOCK — open something (e.g., OPEN GRATE)
+* CLOSE / LOCK — close something
+* ON / OFF — turn the lamp on or off
+* LOOK — examine your surroundings in detail
+* INVENTORY — see what you're carrying
+* SCORE — check your score
+* EAT / DRINK — consume items
+* WAVE — wave an object
+* THROW — throw an object
+* XYZZY — a magic word...
+* HELP — get hints
+
+## Tips
+
+* Take the lamp from the building — you'll need it in the cave.
+* Get the keys to unlock the grate.
+* Explore carefully; the cave is vast and full of surprises.
+* Deposit treasures in the building for points.
+
+=> /play Start Playing
+=> / Home

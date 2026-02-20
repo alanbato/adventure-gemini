@@ -1,0 +1,29 @@
+{% if is_finished %}
+# Game Over
+{% else %}
+# {{ description | truncate(60, True) }}
+
+{{ description }}
+{% for obj_desc in objects %}
+{{ obj_desc }}
+{% endfor %}
+{% endif %}
+{% if message %}
+> {{ message }}
+{% endif %}
+{% if not is_finished %}
+
+## Exits
+{% for exit in exits %}
+=> /go/{{ exit | lower }} {{ exit }}
+{% endfor %}
+
+=> /cmd Enter a command
+=> /inventory Inventory
+=> /score Score
+=> /look Look around
+=> /new Start over
+{% endif %}
+=> / Home
+
+Turn {{ turns }}

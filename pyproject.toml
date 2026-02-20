@@ -1,0 +1,36 @@
+[project]
+name = "adventure"
+version = "0.1.0"
+description = "Colossal Cave Adventure over Gemini"
+readme = "README.md"
+authors = [
+    { name = "Alan Velasco", email = "dev@alanbato.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "nauyaca[reload]>=0.9.0",
+    "structlog>=25.1.0",
+    "xitzin[sqlmodel]>=0.3.0",
+]
+
+[project.scripts]
+adventure = "adventure:main"
+
+[build-system]
+requires = ["uv_build>=0.10.4,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=0.26.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.14.13",
+    "ty>=0.0.12",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "C"]

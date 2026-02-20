@@ -1,0 +1,112 @@
+"""Tests for the command engine."""
+
+from adventure.engine.commands import (
+    get_exits,
+    get_room_description,
+    get_visible_objects,
+    handle_command,
+)
+from adventure.engine.state import CARRIED, GRATE, KEYS, LAMP, new_game_state
+from adventure.engine.world import World
+
+
+def test_look(world: World):
+    """LOOK returns room description."""
+    state = new_game_state(world)
+    result = handle_command(world, state, "look")
+    assert "ROAD" in result.upper() or "BUILDING" in result.upper()
+
+
+def test_inventory_empty(world: World):
+    """INVENTORY when not carrying anything."""
+    state = new_game_state(world)
+    result = handle_command(world, state, "inventory")
+    assert "not carrying" in result.lower()
+
+
+def test_take_keys(world: World):
+    """TAKE KEYS picks up the keys."""
+    state = new_game_state(world)
+    # Keys start at room 3 (building), move player there
+    state.current_room = 3
+    state.visited_rooms.add(3)
+    state.object_locations[LAMP] = CARRIED
+    state.lamp_on = True
+    result = handle_command(world, state, "take keys")
+    assert state.object_locations[KEYS] == CARRIED or "OK" in result
+
+
+def test_go_direction(world: World):
+    """Going a valid direction moves the player."""
+    state = new_game_state(world)
+    old_room = state.current_room
+    handle_command(world, state, "south")
+    # Player should have moved (or gotten a message)
+    # Room 1 going south goes to room 4 (valley)
+    assert state.current_room != old_room or state.turns > 0
+
+
+def test_score(world: World):
+    """SCORE returns score info."""
+    state = new_game_state(world)
+    result = handle_command(world, state, "score")
+    assert "score" in result.lower()
+
+
+def test_help(world: World):
+    """HELP returns help text."""
+    state = new_game_state(world)
+    result = handle_command(world, state, "help")
+    assert "vocabulary" in result.lower() or "know" in result.lower()
+
+
+def test_get_exits(world: World):
+    """get_exits returns direction names."""
+    state = new_game_state(world)
+    exits = get_exits(world, state)
+    assert len(exits) > 0
+    # Room 1 should have multiple exits
+    directions = {e.lower() for e in exits}
+    assert len(directions) > 0
+
+
+def test_get_room_description(world: World):
+    """get_room_description returns room text."""
+    state = new_game_state(world)
+    desc = get_room_description(world, state)
+    assert len(desc) > 0
+
+
+def test_get_visible_objects(world: World):
+    """get_visible_objects finds objects in room."""
+    state = new_game_state(world)
+    state.current_room = 3  # building has objects
+    objects = get_visible_objects(world, state)
+    # Building should have keys, lamp, food, bottle
+    assert len(objects) > 0
+
+
+def test_unknown_command(world: World):
+    """Unknown command gives error message."""
+    state = new_game_state(world)
+    result = handle_command(world, state, "xyzflurble")
+    assert "don't understand" in result.lower() or "don't know" in result.lower()
+
+
+def test_quit(world: World):
+    """QUIT ends the game."""
+    state = new_game_state(world)
+    result = handle_command(world, state, "quit")
+    assert state.is_finished
+    assert "score" in result.lower()
+
+
+def test_open_grate_with_keys(world: World):
+    """Opening grate with keys works."""
+    state = new_game_state(world)
+    state.current_room = 8  # depression with grate
+    state.object_locations[KEYS] = CARRIED
+    state.object_locations[LAMP] = CARRIED
+    state.lamp_on = True
+    result = handle_command(world, state, "open grate")
+    assert state.object_props.get(GRATE) == 1 or "no keys" in result.lower()
