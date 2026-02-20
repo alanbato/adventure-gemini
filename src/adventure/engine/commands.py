@@ -6,6 +6,7 @@ All handlers mutate state in place and return descriptive text.
 """
 
 import random
+from collections.abc import Callable
 
 from .state import (
     AXE,
@@ -37,6 +38,15 @@ from .state import (
     GameState,
 )
 from .world import World
+
+# The original game only considers the first 5 characters of each word.
+WORD_LENGTH = 5
+
+
+def _normalize_word(word: str) -> str:
+    """Truncate a word to the significant prefix length."""
+    return word[:WORD_LENGTH]
+
 
 # Motion word numbers (from section 4 of advent.dat)
 # These map to verb numbers in the vocabulary
@@ -179,8 +189,8 @@ def handle_command(world: World, state: GameState, raw_input: str) -> str:
     if not words:
         return "I beg your pardon?"
 
-    verb = words[0][:5]
-    noun = words[1][:5] if len(words) > 1 else None
+    verb = _normalize_word(words[0])
+    noun = _normalize_word(words[1]) if len(words) > 1 else None
 
     return _dispatch_verb(world, state, verb, noun) or (
         "I don't understand that command."
@@ -198,7 +208,7 @@ def _resolve_noun(world: World, state: GameState, noun: str | None) -> int | Non
     """Resolve a noun string to an object number."""
     if noun is None:
         return None
-    noun = noun[:5]
+    noun = _normalize_word(noun)
     if noun in world.object_names:
         return world.object_names[noun]
     return None
@@ -337,7 +347,7 @@ def get_inventory(world: World, state: GameState) -> list[str]:
 
 def _resolve_direction(world: World, direction: str) -> int | None:
     """Resolve a direction string to a verb number."""
-    direction = direction[:5].lower()
+    direction = _normalize_word(direction.lower())
     verb_n = MOTION_WORDS.get(direction)
     if verb_n is not None:
         return verb_n
@@ -410,23 +420,23 @@ def _cmd_go(world: World, state: GameState, direction: str) -> str:
 
 def _check_condition(world: World, state: GameState, condition: tuple) -> bool:
     """Check if a travel table condition is satisfied."""
-    c = condition[0]
-    if c is None:
-        return True
-    if c == "%":
-        return random.randint(1, 100) <= condition[1]
-    if c == "not_dwarf":
-        return True  # Simplified: always true for non-dwarves
-    if c == "carrying":
-        return _is_carrying(state, condition[1])
-    if c == "carrying_or_in_room_with":
-        return _is_carrying(state, condition[1]) or _is_at(
-            state, condition[1], state.current_room
-        )
-    if c == "prop!=":
-        obj_n, val = condition[1], condition[2]
-        return state.object_props.get(obj_n, 0) != val
-    return True
+    match condition:
+        case (None,):
+            return True
+        case ("%", chance):
+            return random.randint(1, 100) <= chance
+        case ("not_dwarf",):
+            return True  # Simplified: always true for non-dwarves
+        case ("carrying", obj_n):
+            return _is_carrying(state, obj_n)
+        case ("carrying_or_in_room_with", obj_n):
+            return _is_carrying(state, obj_n) or _is_at(
+                state, obj_n, state.current_room
+            )
+        case ("prop!=", obj_n, val):
+            return state.object_props.get(obj_n, 0) != val
+        case _:
+            return True
 
 
 def _handle_special_movement(world: World, state: GameState, dest: int) -> str:
@@ -577,7 +587,7 @@ def _open_chain(state: GameState) -> str:
     return "The chain is now unlocked."
 
 
-_OPEN_HANDLERS: dict[int, callable] = {
+_OPEN_HANDLERS: dict[int, Callable] = {
     DOOR: lambda _: "The door is extremely rusty and refuses to open.",
     OYSTER: lambda _: "The oyster creaks open, revealing nothing inside.",
     GRATE: lambda s: _open_grate(s),
@@ -694,7 +704,7 @@ def _cmd_eat(world: World, state: GameState, noun: str | None) -> str:
 
 def _cmd_drink(world: World, state: GameState, noun: str | None) -> str:
     """Handle DRINK command."""
-    if noun is None or noun[:5] == "water":
+    if noun is None or _normalize_word(noun) == "water":
         if _is_carrying(state, WATER):
             state.object_locations[WATER] = DESTROYED
             state.object_props[BOTTLE] = 0
@@ -738,7 +748,7 @@ def _cmd_pour(world: World, state: GameState, noun: str | None) -> str:
 
 def _cmd_fill(world: World, state: GameState, noun: str | None) -> str:
     """Handle FILL command."""
-    if noun and noun[:5] == "bottl":
+    if noun and _normalize_word(noun) == "bottl":
         if not _is_carrying(state, BOTTLE):
             return "You aren't carrying it!"
         if _is_carrying(state, WATER) or _is_carrying(state, OIL):
@@ -787,44 +797,77 @@ def _cmd_throw(world: World, state: GameState, noun: str | None) -> str:
     return _cmd_drop(world, state, noun)
 
 
+def _attack_dragon(state: GameState) -> str:
+    if state.object_props.get(DRAGON, 0) != 0:
+        return "The dragon is already dead."
+    state.object_props[DRAGON] = 1  # dead
+    state.object_props[DRAGON + 100] = 0
+    return (
+        "With what? Your bare hands?\n\n"
+        "Congratulations! You have just vanquished a dragon "
+        "with your bare hands! (Strstrstr...)"
+    )
+
+
+def _attack_bird(state: GameState) -> str:
+    if _is_here(state, BIRD):
+        state.object_locations[BIRD] = DESTROYED
+        return "The little bird is now dead. Its body disappears."
+    return "I see no bird here."
+
+
+def _attack_bear(state: GameState) -> str:
+    if state.bear_tame:
+        return "The bear is confused. He only wants to be your friend."
+    return "With what? Your bare hands? Against HIS bare hands?"
+
+
+_ATTACK_HANDLERS: dict[int, Callable] = {
+    DRAGON: _attack_dragon,
+    SNAKE: lambda _: "Attacking the snake both doesn't work and is very dangerous.",
+    BIRD: _attack_bird,
+    TROLL: lambda _: (
+        "Trolls are close relatives with the rocks "
+        "and have skin as tough as stone."
+    ),
+    BEAR: _attack_bear,
+}
+
+
 def _cmd_attack(world: World, state: GameState, noun: str | None) -> str:
     """Handle KILL/ATTACK commands."""
     if noun is None:
         return "What do you want to attack?"
     obj_n = _resolve_noun(world, state, noun)
-
-    if obj_n == DRAGON:
-        if state.object_props.get(DRAGON, 0) != 0:
-            return "The dragon is already dead."
-        state.object_props[DRAGON] = 1  # dead
-        state.object_props[DRAGON + 100] = 0
-        return (
-            "With what? Your bare hands?\n\n"
-            "Congratulations! You have just vanquished a dragon "
-            "with your bare hands! (Strstrstr...)"
-        )
-
-    if obj_n == SNAKE:
-        return "Attacking the snake both doesn't work and is very dangerous."
-
-    if obj_n == BIRD:
-        if _is_here(state, BIRD):
-            state.object_locations[BIRD] = DESTROYED
-            return "The little bird is now dead. Its body disappears."
-        return "I see no bird here."
-
-    if obj_n == TROLL:
-        return (
-            "Trolls are close relatives with the rocks "
-            "and have skin as tough as stone."
-        )
-
-    if obj_n == BEAR:
-        if state.bear_tame:
-            return "The bear is confused. He only wants to be your friend."
-        return "With what? Your bare hands? Against HIS bare hands?"
-
+    handler = _ATTACK_HANDLERS.get(obj_n)
+    if handler:
+        return handler(state)
     return "I'm game. Would you care to explain how?"
+
+
+def _feed_snake(state: GameState) -> str:
+    if _is_carrying(state, BIRD):
+        state.object_locations[BIRD] = DESTROYED
+        return "The snake devours your bird!"
+    return "There's nothing here it wants to eat."
+
+
+def _feed_bear(state: GameState) -> str:
+    if _is_carrying(state, FOOD):
+        state.object_locations[FOOD] = DESTROYED
+        state.object_props[BEAR] = 1
+        state.bear_tame = True
+        return "The bear eagerly wolfs down your food."
+    return "There's nothing here it wants to eat."
+
+
+_FEED_HANDLERS: dict[int, Callable] = {
+    BIRD: lambda _: "It's not hungry (it's merely pstrp).",
+    DRAGON: lambda _: "There's nothing here it wants to eat (strstrstr...).",
+    SNAKE: _feed_snake,
+    TROLL: lambda _: "Gluttony is not one of the tstrstrstr...",
+    BEAR: _feed_bear,
+}
 
 
 def _cmd_feed(world: World, state: GameState, noun: str | None) -> str:
@@ -832,27 +875,20 @@ def _cmd_feed(world: World, state: GameState, noun: str | None) -> str:
     if noun is None:
         return "What do you want to feed?"
     obj_n = _resolve_noun(world, state, noun)
-
-    if obj_n == BIRD:
-        return "It's not hungry (it's merely pstrp)."
-    if obj_n == DRAGON:
-        return "There's nothing here it wants to eat (strstrstr...)."
-    if obj_n == SNAKE:
-        if _is_carrying(state, BIRD):
-            state.object_locations[BIRD] = DESTROYED
-            return "The snake devours your bird!"
-        return "There's nothing here it wants to eat."
-    if obj_n == TROLL:
-        return "Gluttony is not one of the tstrstrstr..."
-    if obj_n == BEAR:
-        if _is_carrying(state, FOOD):
-            state.object_locations[FOOD] = DESTROYED
-            state.object_props[BEAR] = 1
-            state.bear_tame = True
-            return "The bear eagerly wolfs down your food."
-        return "There's nothing here it wants to eat."
-
+    handler = _FEED_HANDLERS.get(obj_n)
+    if handler:
+        return handler(state)
     return "I'm not sure what you want me to do."
+
+
+_READABLE_MESSAGES: dict[int, str] = {
+    MAGAZINE: (
+        "The magazine is written in dwarvish. "
+        'The only thing you can make out is "STRSTRSTR".'
+    ),
+    TABLET: '"CONGRATULATIONS ON BRINGING LIGHT INTO THE DARK-ROOM!"',
+    OYSTER: "It says the same thing it did before.",
+}
 
 
 def _cmd_read(world: World, state: GameState, noun: str | None) -> str:
@@ -863,15 +899,9 @@ def _cmd_read(world: World, state: GameState, noun: str | None) -> str:
         return "What do you want to read?"
     obj_n = _resolve_noun(world, state, noun)
 
-    if obj_n == MAGAZINE and _is_here(state, MAGAZINE):
-        return (
-            "The magazine is written in dwarvish. "
-            'The only thing you can make out is "STRSTRSTR".'
-        )
-    if obj_n == TABLET and _is_here(state, TABLET):
-        return '"CONGRATULATIONS ON BRINGING LIGHT INTO THE DARK-ROOM!"'
-    if obj_n == OYSTER and _is_here(state, OYSTER):
-        return "It says the same thing it did before."
+    message = _READABLE_MESSAGES.get(obj_n)
+    if message and _is_here(state, obj_n):
+        return message
 
     return "I see nothing to read here."
 
@@ -904,7 +934,7 @@ def _cmd_say(world: World, state: GameState, noun: str | None = None) -> str:
     """Handle SAY command."""
     if not noun:
         return "What do you want to say?"
-    word = noun.lower()[:5]
+    word = _normalize_word(noun.lower())
     if word in ("xyzzy", "plugh", "plove"):
         return _cmd_go(world, state, word)
     return f'OK, "{word}".'
@@ -966,7 +996,7 @@ def _static_response(msg: str):
     return handler
 
 
-_VERB_DISPATCH: dict[str, callable] = {
+_VERB_DISPATCH: dict[str, Callable] = {
     **dict.fromkeys(("take", "get", "carry", "catch", "steal", "captu"), _cmd_take),
     **dict.fromkeys(("drop", "relea", "disca"), _cmd_drop),
     **dict.fromkeys(("open", "unloc"), _cmd_open),

@@ -4,6 +4,7 @@ The file has 12 sections separated by -1 lines. A final 0 ends the file.
 Section format reference: Brandon Rhodes' python-adventure data.py.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 
 from .world import Hint, Move, Obj, Room, Word, World
@@ -96,18 +97,19 @@ def _parse_section3(world: World, fields: list, last_travel: list) -> None:
     m, n = divmod(y, 1000)
     mh, mm = divmod(m, 100)
 
-    if m == 0:
-        condition = (None,)
-    elif 0 < m < 100:
-        condition = ("%", m)
-    elif m == 100:
-        condition = ("not_dwarf",)
-    elif 100 < m <= 200:
-        condition = ("carrying", mm)
-    elif 200 < m <= 300:
-        condition = ("carrying_or_in_room_with", mm)
-    else:
-        condition = ("prop!=", mm, mh - 3)
+    match m:
+        case 0:
+            condition = (None,)
+        case _ if 0 < m < 100:
+            condition = ("%", m)
+        case 100:
+            condition = ("not_dwarf",)
+        case _ if 100 < m <= 200:
+            condition = ("carrying", mm)
+        case _ if 200 < m <= 300:
+            condition = ("carrying_or_in_room_with", mm)
+        case _:
+            condition = ("prop!=", mm, mh - 3)
 
     is_forced = len(verbs) == 1 and verbs[0] == 1
 
@@ -199,20 +201,23 @@ def _parse_section8(world: World, fields: list) -> None:
     # We don't need this for our simplified engine
 
 
+_BIT_FLAG_SETTERS: dict[int, Callable] = {
+    0: lambda room: setattr(room, "is_light", True),
+    1: lambda room: setattr(room, "liquid", 22),  # water object number
+    2: lambda room: setattr(room, "liquid", 21),  # oil object number
+    3: lambda room: setattr(room, "is_forbidden_to_pirate", True),
+}
+
+
 def _parse_section9(world: World, fields: list) -> None:
     """Room flags (light, liquid, pirate, hints)."""
     bit = fields[0]
     room_numbers = fields[1:]
+    setter = _BIT_FLAG_SETTERS.get(bit)
     for room_n in room_numbers:
         room = _ensure_room(world.rooms, room_n)
-        if bit == 0:
-            room.is_light = True
-        elif bit == 1:
-            room.liquid = 22  # water object number
-        elif bit == 2:
-            room.liquid = 21  # oil object number
-        elif bit == 3:
-            room.is_forbidden_to_pirate = True
+        if setter:
+            setter(room)
         else:
             hint = _ensure_hint(world.hints, bit)
             if room_n not in hint.rooms:
