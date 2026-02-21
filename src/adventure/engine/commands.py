@@ -17,10 +17,15 @@ from .state import (
     CAGE,
     CARRIED,
     CHAIN,
+    CHASM,
+    CHEST,
     CLAM,
     DESTROYED,
     DOOR,
     DRAGON,
+    EGGS,
+    EMERALD,
+    FISSURE,
     FOOD,
     GRATE,
     KEYS,
@@ -30,7 +35,9 @@ from .state import (
     OYSTER,
     PILLOW,
     PLANT,
+    PLANT2,
     ROD,
+    ROD2,
     SNAKE,
     TABLET,
     TROLL,
@@ -126,6 +133,89 @@ def _tick_lamp(world: World, state: GameState) -> str | None:
     return "Your lamp has run out of power."
 
 
+def _count_treasures_found(world: World, state: GameState) -> int:
+    """Count treasures that have been seen (have a prop value set)."""
+    count = 0
+    for obj_id, obj in world.objects.items():
+        if obj.is_treasure and obj_id in state.object_props:
+            count += 1
+    return count
+
+
+def _tick_closing(world: World, state: GameState) -> str | None:
+    """Tick the cave closing clocks. Returns message if cave event triggered."""
+    if state.is_closed or state.is_finished:
+        return None
+
+    # Only start counting when all 15 treasures have been found and player
+    # is in a deep room (>=15) that isn't the building approaches
+    if not state.is_closing:
+        # Check if all treasures have been found
+        treasures_found = _count_treasures_found(world, state)
+        if treasures_found < 15:
+            return None
+        if state.current_room < 15 or state.current_room == 33:
+            return None
+
+        state.clock1 -= 1
+        if state.clock1 > 0:
+            return None
+
+        # Start closing!
+        return _start_closing(world, state)
+
+    # Already closing — tick clock2
+    state.clock2 -= 1
+    if state.clock2 > 0:
+        return None
+
+    # Close the cave!
+    return _close_cave(world, state)
+
+
+def _start_closing(world: World, state: GameState) -> str:
+    """Begin cave closing sequence."""
+    state.is_closing = True
+    # Lock grate, destroy fissure bridge, remove dwarves/troll/bear
+    state.object_props[GRATE] = 0  # locked
+    state.object_props[FISSURE] = 0  # bridge gone
+    state.object_locations[TROLL] = DESTROYED
+    state.object_locations[BEAR] = DESTROYED
+    state.dwarf_locations = []
+    state.pirate_location = 0
+    return world.messages.get(129, "A sepulchral voice says, \"Cave closing soon.\"")
+
+
+def _close_cave(world: World, state: GameState) -> str:
+    """Close the cave — teleport to endgame repository."""
+    state.is_closed = True
+    state.is_closing = False
+
+    # Drop everything the player is carrying
+    for obj_id in list(state.object_locations):
+        if state.object_locations[obj_id] == CARRIED:
+            state.object_locations[obj_id] = state.current_room
+
+    # Place specific objects in the repository rooms
+    state.object_locations[LAMP] = 115
+    state.object_props[LAMP] = 1  # on
+    state.lamp_on = True
+    state.lamp_turns = 50  # enough for endgame
+    if ROD2 in state.object_locations:
+        state.object_locations[ROD2] = 115
+
+    state.object_locations[GRATE] = 116
+    state.object_locations[SNAKE] = 116
+    state.object_locations[BIRD] = 116
+
+    # Teleport player to NE end of repository (room 115)
+    state.old_room = state.current_room
+    state.current_room = 115
+    state.visited_rooms.add(115)
+
+    return world.messages.get(132, "The cave is now closed.")
+
+
 def _dispatch_verb(
     world: World, state: GameState, verb: str, noun: str | None,
 ) -> str | None:
@@ -155,6 +245,9 @@ def handle_command(world: World, state: GameState, raw_input: str) -> str:
     if lamp_msg:
         return lamp_msg
 
+    # Cave closing clock tick
+    closing_msg = _tick_closing(world, state)
+
     words = raw_input.strip().lower().split()
     if not words:
         return "I beg your pardon?"
@@ -162,9 +255,20 @@ def handle_command(world: World, state: GameState, raw_input: str) -> str:
     verb = _normalize_word(words[0])
     noun = _normalize_word(words[1]) if len(words) > 1 else None
 
-    return _dispatch_verb(world, state, verb, noun) or (
+    # Fee/fie/foe/foo/fum are special words dispatched by name
+    if verb in ("fee", "fie", "foe", "foo", "fum"):
+        result = _cmd_fee_word(world, state, verb)
+        if closing_msg:
+            return closing_msg + "\n\n" + result
+        return result
+
+    result = _dispatch_verb(world, state, verb, noun) or (
         "I don't understand that command."
     )
+
+    if closing_msg:
+        return closing_msg + "\n\n" + result
+    return result
 
 
 def _is_motion_word(world: World, word: str) -> bool:
@@ -360,20 +464,80 @@ def _move_to(world: World, state: GameState, dest: int) -> str:
 
     new_room = world.rooms.get(dest)
     if new_room and new_room.travel_table and new_room.travel_table[0].is_forced:
-        forced = new_room.travel_table[0]
-        if 0 < forced.destination <= 300:
-            msg = get_room_description(world, state)
-            state.old_room = state.current_room
-            state.current_room = forced.destination
-            state.visited_rooms.add(forced.destination)
-            return msg + "\n\n" + get_room_description(world, state)
-        if forced.destination < 0:
-            return world.messages.get(-forced.destination, "")
+        return _handle_forced(world, state, new_room)
 
     if _is_dark(world, state) and random.random() < 0.35:
         return _cmd_die(world, state)
 
     return get_room_description(world, state)
+
+
+def _handle_forced(world: World, state: GameState, room) -> str:
+    """Walk forced movement entries with condition checking."""
+    msg = get_room_description(world, state)
+    for move in room.travel_table:
+        if not move.is_forced:
+            continue
+        if not _check_condition(world, state, move.condition):
+            continue
+        dest = move.destination
+        if 0 < dest <= 300:
+            state.old_room = state.current_room
+            state.current_room = dest
+            state.visited_rooms.add(dest)
+            next_room = world.rooms.get(dest)
+            if (
+                next_room
+                and next_room.travel_table
+                and next_room.travel_table[0].is_forced
+            ):
+                return msg + "\n\n" + _handle_forced(
+                    world, state, next_room,
+                )
+            return msg + "\n\n" + get_room_description(world, state)
+        if dest < 0:
+            return world.messages.get(-dest, "")
+        if 301 <= dest <= 500:
+            return msg + "\n\n" + _handle_special_movement(
+                world, state, dest,
+            )
+        break
+    return msg
+
+
+def _check_closing_block(
+    state: GameState, direction: str,
+) -> str | None:
+    """Block magic words during cave closing."""
+    if not state.is_closing:
+        return None
+    norm = _normalize_word(direction.lower())
+    if norm in ("xyzzy", "plugh"):
+        return (
+            'A mysterious recorded voice groans into life '
+            'and announces:\n'
+            '   "This exit is closed.  Please leave via '
+            'main office."'
+        )
+    return None
+
+
+def _walk_travel_table(
+    world: World, state: GameState, room, verb_n: int,
+) -> str | None:
+    """Walk the travel table for the given verb and return response."""
+    for move in room.travel_table:
+        if verb_n not in move.verbs and not move.is_forced:
+            continue
+        if not _check_condition(world, state, move.condition):
+            continue
+        dest = move.destination
+        if dest < 0:
+            return world.messages.get(-dest, "You can't go that way.")
+        if 301 <= dest <= 500:
+            return _handle_special_movement(world, state, dest)
+        return _move_to(world, state, dest)
+    return None
 
 
 def _cmd_go(world: World, state: GameState, direction: str) -> str:
@@ -394,21 +558,14 @@ def _cmd_go(world: World, state: GameState, direction: str) -> str:
     if verb_n == LOOK_VERB:
         return _cmd_look(world, state)
 
-    # Walk the travel table
-    for move in room.travel_table:
-        if verb_n not in move.verbs and not move.is_forced:
-            continue
-        if not _check_condition(world, state, move.condition):
-            continue
+    # During cave closing, block magic words that go to building
+    blocked = _check_closing_block(state, direction)
+    if blocked:
+        return blocked
 
-        dest = move.destination
-        if dest < 0:
-            return world.messages.get(-dest, "You can't go that way.")
-        if 301 <= dest <= 500:
-            return _handle_special_movement(world, state, dest)
-        return _move_to(world, state, dest)
-
-    return "You can't go that way."
+    return _walk_travel_table(world, state, room, verb_n) or (
+        "You can't go that way."
+    )
 
 
 def _check_condition(world: World, state: GameState, condition: tuple) -> bool:
@@ -434,10 +591,46 @@ def _check_condition(world: World, state: GameState, condition: tuple) -> bool:
 
 def _handle_special_movement(world: World, state: GameState, dest: int) -> str:
     """Handle special movement codes 301-500."""
-    # These are mostly death and special location handling
     if dest == 301:
         return _cmd_die(world, state)
+    if dest == 302:
+        # Plover room teleport — drop emerald if carrying
+        if _is_carrying(state, EMERALD):
+            state.object_locations[EMERALD] = state.current_room
+        return _move_to(world, state, 33)
+    if dest == 303:
+        return _cross_troll_bridge(world, state)
     return "Something strange happens..."
+
+
+def _cross_troll_bridge(world: World, state: GameState) -> str:
+    """Handle crossing the troll bridge (special movement 303)."""
+    # Determine which side we're on and the destination
+    if state.current_room == 117:
+        other_side = 122
+    else:
+        other_side = 117
+
+    # If carrying bear, bridge collapses
+    if _is_carrying(state, BEAR):
+        # Bridge collapses, bear and troll fall
+        msg = (
+            "Just as you reach the other side, the bridge buckles beneath the "
+            "weight of the bear and you. You scrabble desperately for support, "
+            "but as the bridge collapses you stumble back and fall into the chasm."
+        )
+        state.object_props[CHASM] = 1  # wrecked bridge
+        state.object_props[TROLL] = 2  # troll gone
+        state.object_locations[BEAR] = DESTROYED
+        state.object_locations[TROLL] = DESTROYED
+        return msg + "\n\n" + _cmd_die(world, state)
+
+    # Normal crossing
+    result = _move_to(world, state, other_side)
+    # After crossing, troll returns to block bridge again
+    if state.object_props.get(TROLL, 0) == 0:
+        state.object_props[TROLL] = 1
+    return result
 
 
 def _cmd_die(world: World, state: GameState) -> str:
@@ -465,6 +658,14 @@ def _cmd_die(world: World, state: GameState) -> str:
     )
 
 
+def _take_bear(state: GameState) -> str:
+    """Handle taking the bear."""
+    if not state.bear_tame:
+        return "It is fixed in place."
+    state.object_locations[BEAR] = CARRIED
+    return "OK."
+
+
 def _take_special(state: GameState, obj_n: int) -> str | None:
     """Handle special take logic for bird and liquids. Returns message or None."""
     if obj_n == BIRD:
@@ -486,23 +687,34 @@ def _take_special(state: GameState, obj_n: int) -> str | None:
     return None
 
 
-def _cmd_take(world: World, state: GameState, noun: str | None = None) -> str:
-    """Handle TAKE/GET commands."""
-    if noun is None:
-        return "What do you want to take?"
+def _take_from_liquid_source(
+    world: World, state: GameState, obj_n: int,
+) -> str | None:
+    """Take water/oil from a room liquid source. Returns message or None."""
+    if obj_n not in (WATER, OIL):
+        return None
+    room = world.rooms.get(state.current_room)
+    if room and room.liquid == obj_n:
+        return _take_special(state, obj_n)
+    return None
 
-    obj_n = _resolve_noun(world, state, noun)
-    if obj_n is None:
-        return f"I don't know what '{noun}' is."
 
-    if _is_carrying(state, obj_n):
-        return "You're already carrying it!"
+def _is_takeable(state: GameState, obj_n: int, obj) -> bool:
+    """Check if an object can be picked up (not fixed in place)."""
+    if not obj or not obj.is_fixed:
+        return True
+    # Chain is takeable when unlocked (prop 0)
+    return obj_n == CHAIN and state.object_props.get(CHAIN, 1) == 0
 
-    if not _is_at(state, obj_n, state.current_room):
-        return "I don't see that here."
 
+def _do_take(world: World, state: GameState, obj_n: int) -> str:
+    """Perform the take after validation (object resolved and located)."""
     obj = world.objects.get(obj_n)
-    if obj and obj.is_fixed:
+
+    if obj_n == BEAR:
+        return _take_bear(state)
+
+    if not _is_takeable(state, obj_n, obj):
         return "It is fixed in place."
 
     if _is_dark(world, state):
@@ -516,7 +728,30 @@ def _cmd_take(world: World, state: GameState, noun: str | None = None) -> str:
         return "You can't carry any more. Try dropping something first."
 
     state.object_locations[obj_n] = CARRIED
+    # Mark treasure as "found" for scoring when first picked up
+    if obj and obj.is_treasure and obj_n not in state.object_props:
+        state.object_props[obj_n] = 0
     return "OK."
+
+
+def _cmd_take(world: World, state: GameState, noun: str | None = None) -> str:
+    """Handle TAKE/GET commands."""
+    if noun is None:
+        return "What do you want to take?"
+
+    obj_n = _resolve_noun(world, state, noun)
+    if obj_n is None:
+        return f"I don't know what '{noun}' is."
+
+    if _is_carrying(state, obj_n):
+        return "You're already carrying it!"
+
+    if not _is_at(state, obj_n, state.current_room):
+        return _take_from_liquid_source(world, state, obj_n) or (
+            "I don't see that here."
+        )
+
+    return _do_take(world, state, obj_n)
 
 
 def _cmd_drop(world: World, state: GameState, noun: str | None = None) -> str:
@@ -541,15 +776,37 @@ def _cmd_drop(world: World, state: GameState, noun: str | None = None) -> str:
             state.object_locations[BIRD] = state.current_room
             return "The little bird attacks the green snake, which flees."
 
+    # Special: dropping bear at troll
+    if obj_n == BEAR:
+        if _is_at(state, TROLL, state.current_room) or (
+            state.current_room in (117, 122)
+            and state.object_props.get(TROLL, 0) == 1
+        ):
+            # Bear scares troll away
+            state.object_locations[BEAR] = state.current_room
+            state.object_props[BEAR] = 3  # bear wanders off
+            state.object_props[TROLL] = 2  # troll gone
+            state.object_locations[TROLL] = DESTROYED
+            state.object_props[CHASM] = 0  # bridge open
+            return (
+                "The bear lumbers toward the troll, who lets out a startled shriek and "
+                "scurries away. The bear soon gives up the pursuit and wanders back."
+            )
+        state.object_locations[BEAR] = state.current_room
+        return "OK."
+
     # Special: vase breaks if dropped without pillow
     if obj_n == VASE:
-        if not _is_at(state, PILLOW, state.current_room):
-            state.object_props[VASE] = 2  # broken
+        if _is_at(state, PILLOW, state.current_room):
+            state.object_props[VASE] = 0
             state.object_locations[VASE] = state.current_room
-            return (
-                "The vase drops with a delicate crash and shatters into "
-                "a thousand pieces."
-            )
+            return "The vase is now resting, delicately, on a velvet pillow."
+        state.object_props[VASE] = 2  # broken
+        state.object_locations[VASE] = state.current_room
+        return (
+            "The vase drops with a delicate crash and shatters into "
+            "a thousand pieces."
+        )
 
     state.object_locations[obj_n] = state.current_room
     return "OK."
@@ -563,10 +820,13 @@ def _open_grate(state: GameState) -> str:
 
 
 def _open_clam(state: GameState) -> str:
-    if not _is_carrying(state, CLAM):
+    if _is_carrying(state, CLAM):
         return "I advise you to put down the clam before opening it. >STRAIN!<"
     state.object_locations[CLAM] = DESTROYED
     state.object_locations[OYSTER] = state.current_room
+    # Pearl rolls to cul-de-sac (room 105)
+    state.object_locations[61] = 105  # pearl
+    state.object_props[61] = 0
     return "A glistening pearl falls out of the clam and rolls away!"
 
 
@@ -581,8 +841,14 @@ def _open_chain(state: GameState) -> str:
     return "The chain is now unlocked."
 
 
+def _open_door(state: GameState) -> str:
+    if state.object_props.get(DOOR, 0) == 1:
+        return "The door is open."
+    return "The door is extremely rusty and refuses to open."
+
+
 _OPEN_HANDLERS: dict[int, Callable] = {
-    DOOR: lambda _: "The door is extremely rusty and refuses to open.",
+    DOOR: _open_door,
     OYSTER: lambda _: "The oyster creaks open, revealing nothing inside.",
     GRATE: lambda s: _open_grate(s),
     CLAM: lambda s: _open_clam(s),
@@ -704,7 +970,7 @@ def _cmd_drink(world: World, state: GameState, noun: str | None = None) -> str:
             state.object_props[BOTTLE] = 0
             return "The water is refreshing."
         room = world.rooms.get(state.current_room)
-        if room and room.liquid == 22:
+        if room and room.liquid == WATER:
             return "You take a drink from the stream."
         return "There is nothing here to drink."
     return "That's not something you can drink."
@@ -721,7 +987,8 @@ def _cmd_pour(world: World, state: GameState, noun: str | None = None) -> str:
         # Watering plant
         if _is_at(state, PLANT, state.current_room):
             prop = state.object_props.get(PLANT, 0)
-            state.object_props[PLANT] = prop + 1
+            state.object_props[PLANT] = prop + 2
+            state.object_props[PLANT2] = prop + 2  # mirror plant2 state
             if prop == 0:
                 return (
                     "The plant spurts into furious growth for a few seconds."
@@ -751,7 +1018,7 @@ def _cmd_fill(world: World, state: GameState, noun: str | None = None) -> str:
         if room and room.liquid:
             liquid = room.liquid
             state.object_locations[liquid] = CARRIED
-            state.object_props[BOTTLE] = 1 if liquid == 22 else 2
+            state.object_props[BOTTLE] = 1 if liquid == WATER else 2
             return "Your bottle is now full."
         return "There is nothing here with which to fill the bottle."
     return "You can't fill that."
@@ -787,6 +1054,27 @@ def _cmd_throw(world: World, state: GameState, noun: str | None = None) -> str:
         state.object_locations[AXE] = state.current_room
         return "The axe bounces harmlessly off a wall and falls to the ground."
 
+    # Throwing treasure at troll
+    troll_here = (
+        _is_at(state, TROLL, state.current_room)
+        or (
+            _is_at(state, TROLL, 117)
+            and state.current_room in (117, 122)
+        )
+    )
+    if troll_here:
+        obj = world.objects.get(obj_n)
+        if obj and obj.is_treasure:
+            state.object_locations[obj_n] = DESTROYED
+            state.object_props[TROLL] = 2
+            state.object_locations[TROLL] = DESTROYED
+            state.object_props[CHASM] = 0
+            fallback = (
+                "The troll catches your treasure "
+                "and scurries away out of sight."
+            )
+            return world.messages.get(159, fallback)
+
     # Default: just drop it
     return _cmd_drop(world, state, noun)
 
@@ -796,6 +1084,9 @@ def _attack_dragon(state: GameState) -> str:
         return "The dragon is already dead."
     state.object_props[DRAGON] = 1  # dead
     state.object_props[DRAGON + 100] = 0
+    # Rug is no longer pinned under dragon — make it takeable at player's room
+    state.object_locations[62] = state.current_room  # rug
+    state.object_props[62] = 0  # rug is free
     return (
         "With what? Your bare hands?\n\n"
         "Congratulations! You have just vanquished a dragon "
@@ -952,35 +1243,131 @@ def _cmd_help(world: World, state: GameState, noun: str | None = None) -> str:
     )
 
 
-def calculate_score(world: World, state: GameState) -> int:
-    """Calculate the current score."""
+def _score_treasures(world: World, state: GameState) -> int:
+    """Score points for treasures found and stored."""
     score = 0
-
-    # Points for treasures stored safely in building (room 3)
     for obj_id, obj in world.objects.items():
-        if obj.is_treasure:
-            loc = state.object_locations.get(obj_id)
-            if loc == 3:
-                score += 12
-            elif loc == CARRIED:
-                score += 2
+        if not obj.is_treasure:
+            continue
+        if obj_id < CHEST:
+            value = 12
+        elif obj_id == CHEST:
+            value = 14
+        else:
+            value = 16
+        if obj_id in state.object_props:
+            score += 2
+        in_building = state.object_locations.get(obj_id) == 3
+        prop_zero = state.object_props.get(obj_id, -1) == 0
+        if in_building and prop_zero:
+            score += value - 2
+    return score
 
-    # Points for survival and exploration
-    score += max(0, state.deaths * -10)
 
-    # Points for visiting rooms beyond the hall of mists
-    deep_rooms = sum(1 for r in state.visited_rooms if r >= 15)
-    score += min(deep_rooms, 25)
+def calculate_score(world: World, state: GameState) -> int:
+    """Calculate the current score using the original 350-point formula."""
+    score = 2 + _score_treasures(world, state)
 
-    # Getting into cave
-    if any(r >= 15 for r in state.visited_rooms):
-        score += 25
+    # Survival bonus: 10 per unused death
+    score += (state.max_deaths - state.deaths) * 10
 
-    # Bonus for not quitting
+    # Not quitting
     if not state.gave_up:
         score += 4
 
+    # Getting into cave (dwarves activated)
+    if state.dwarves_active:
+        score += 25
+
+    # Cave closing started
+    if state.is_closing:
+        score += 25
+
+    # Cave closed + endgame bonus
+    if state.is_closed:
+        score += 25
+        bonus_scores = {133: 45, 134: 30, 135: 25, 0: 10}
+        score += bonus_scores.get(state.bonus, 10)
+
+    # Magazine in Witt's End (room 108)
+    if state.object_locations.get(MAGAZINE) == 108:
+        score += 1
+
+    # Hint penalties
+    for hint_n in state.hints_given:
+        hint = world.hints.get(hint_n)
+        if hint:
+            score -= hint.penalty
+
     return score
+
+
+def _cmd_fee_word(world: World, state: GameState, word: str) -> str:
+    """Handle a specific fee/fie/foe/foo word."""
+    sequence = ["fee", "fie", "foe", "foo"]
+    if word == "fum":
+        word = "fee"  # fum is a synonym for fee
+    idx = sequence.index(word) if word in sequence else -1
+    if idx < 0:
+        return "I don't understand that."
+
+    if idx == 0:
+        # Starting the sequence
+        state.foobar = state.turns
+        return "OK."
+
+    # Check that previous word was said on the previous turn
+    expected_gap = idx  # fee at turn T, fie at T+1, foe at T+2, foo at T+3
+    if state.turns - state.foobar != expected_gap:
+        state.foobar = 0
+        return "What's the matter, can't you read?  Now you'd best start over."
+
+    if idx < 3:
+        # fie or foe — just continue the sequence
+        return "OK."
+
+    # idx == 3: FOO — teleport eggs back to giant room (92)
+    if _is_at(state, EGGS, 92) and _is_at(state, TROLL, DESTROYED):
+        # Eggs already there, nothing special
+        pass
+    elif _is_at(state, EGGS, 92):
+        # Eggs already in giant room — just describe
+        return "Nothing happens."
+
+    # Move eggs to room 92 (giant room)
+    state.object_locations[EGGS] = 92
+    state.object_props[EGGS] = 0
+
+    # If troll was killed (prop==2) and eggs were used to pay, troll comes back
+    if state.object_props.get(TROLL, 0) == 2:
+        state.object_props[TROLL] = 0
+        state.object_locations[TROLL] = 117
+        state.object_props[CHASM] = 0
+
+    if state.current_room == 92:
+        return get_room_description(world, state)
+    return "Done!"
+
+
+def _cmd_blast(world: World, state: GameState, noun: str | None = None) -> str:
+    """Handle BLAST command — endgame only."""
+    if not state.is_closed:
+        return "Blasting requires dynamite."
+
+    has_rod2 = _is_carrying(state, ROD2) or _is_here(state, ROD2)
+    if not has_rod2:
+        return "Blasting requires dynamite."
+
+    state.is_finished = True
+
+    if state.current_room == 116:
+        state.bonus = 133  # 45 points — maximum
+        return world.messages.get(133, "")
+    if state.current_room == 115:
+        state.bonus = 134  # 30 points
+        return world.messages.get(134, "")
+    state.bonus = 135  # 25 points
+    return world.messages.get(135, "")
 
 
 def _static_response(msg: str):
@@ -1011,10 +1398,11 @@ _VERB_DISPATCH: dict[str, Callable] = {
     "drink": _cmd_drink,
     "pour": _cmd_pour,
     "fill": _cmd_fill,
-    "wave": _cmd_wave,
+    **dict.fromkeys(("wave", "swing"), _cmd_wave),
     "feed": _cmd_feed,
     "say": _cmd_say,
     "brief": _cmd_brief,
+    **dict.fromkeys(("blast", "deton", "ignit", "blowu"), _cmd_blast),
     "swim": _static_response("I don't know how."),
     "nothi": _static_response("OK."),
     "save": _static_response(

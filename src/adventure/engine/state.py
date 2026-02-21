@@ -113,6 +113,15 @@ class GameState:
     # Special flags
     bear_tame: bool = False
 
+    # Fee-fi-fo-fum sequence: turn number of last valid word in sequence
+    foobar: int = 0
+
+    # Endgame blast bonus code (0=not blasted, 133/134/135=blast variants)
+    bonus: int = 0
+
+    # Count of treasures not yet seen (prop still < 0 / not in object_props)
+    treasures_not_found: int = 15
+
 
 def new_game_state(world: World) -> GameState:
     """Create a fresh game state with objects in their starting positions."""
