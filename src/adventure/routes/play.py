@@ -17,11 +17,14 @@ def _game_session(request: Request):
     db_session = Session(request.app.state.engine)
     try:
         player = get_or_create_player(
-            db_session, identity.fingerprint,
+            db_session,
+            identity.fingerprint,
         )
         world = request.app.state.world
         yield AdventureSession.load_or_create(
-            db_session, player, world,
+            db_session,
+            player,
+            world,
         )
     finally:
         db_session.close()
@@ -124,7 +127,9 @@ def _register_info_routes(app: Xitzin) -> None:
                 game.reset()
                 game.save()
                 return _render_play(
-                    app, game, message="A new adventure begins!",
+                    app,
+                    game,
+                    message="A new adventure begins!",
                 )
             return Redirect("/play")
 

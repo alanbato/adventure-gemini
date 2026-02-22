@@ -19,10 +19,12 @@ from .state import (
     CHAIN,
     CHASM,
     CHEST,
+    CHEST_ROOM,
     CLAM,
     DESTROYED,
     DOOR,
     DRAGON,
+    DWARF,
     EGGS,
     EMERALD,
     FISSURE,
@@ -31,9 +33,11 @@ from .state import (
     KEYS,
     LAMP,
     MAGAZINE,
+    MESSAGE,
     OIL,
     OYSTER,
     PILLOW,
+    PIRATE_MSG_ROOM,
     PLANT,
     PLANT2,
     ROD,
@@ -182,8 +186,13 @@ def _start_closing(world: World, state: GameState) -> str:
     state.object_locations[TROLL] = DESTROYED
     state.object_locations[BEAR] = DESTROYED
     state.dwarf_locations = []
+    state.dwarf_old_locations = []
+    state.dwarf_seen = []
+    state.dwarf_stage = 0
     state.pirate_location = 0
-    return world.messages.get(129, "A sepulchral voice says, \"Cave closing soon.\"")
+    state.pirate_old_location = 0
+    state.pirate_seen = False
+    return world.messages.get(129, 'A sepulchral voice says, "Cave closing soon."')
 
 
 def _close_cave(world: World, state: GameState) -> str:
@@ -216,8 +225,347 @@ def _close_cave(world: World, state: GameState) -> str:
     return world.messages.get(132, "The cave is now closed.")
 
 
+# ---------------------------------------------------------------------------
+# Dwarf / pirate AI
+# ---------------------------------------------------------------------------
+
+PLATINUM = 60  # Platinum pyramid object number
+
+
+def _dwarf_valid_destinations(
+    world: World,
+    room_n: int,
+    old_room_n: int,
+) -> list[int]:
+    """Return sorted list of rooms a dwarf can move to from *room_n*.
+
+    Excludes: the current room, the previous room (no backtracking),
+    forced-movement rooms, ``not_dwarf`` routes, and rooms before
+    the Hall of Mists (number < 15).
+    """
+    room = world.rooms.get(room_n)
+    if room is None:
+        return []
+    destinations: set[int] = set()
+    for move in room.travel_table:
+        if move.is_forced:
+            continue
+        if move.condition == ("not_dwarf",):
+            continue
+        dest = move.destination
+        if not (0 < dest <= 300):
+            continue
+        if dest < 15:
+            continue
+        if dest == room_n or dest == old_room_n:
+            continue
+        destinations.add(dest)
+    return sorted(destinations)
+
+
+def _dwarf_first_encounter(world: World, state: GameState) -> str | None:
+    """Handle stage-1 first encounter (5% chance per turn)."""
+    if state.current_room < 15 or random.random() < 0.95:
+        return None
+    state.dwarf_stage = 2
+    # Randomly thin the pack (remove 0-2 dwarves)
+    for _ in range(2):
+        if state.dwarf_locations and random.random() < 0.5:
+            idx = random.randrange(len(state.dwarf_locations))
+            state.dwarf_locations.pop(idx)
+            state.dwarf_old_locations.pop(idx)
+            state.dwarf_seen.pop(idx)
+    # Displace any dwarf sitting in the player's room
+    for i, loc in enumerate(state.dwarf_locations):
+        if loc == state.current_room:
+            state.dwarf_locations[i] = 18  # Hall of Mists
+            state.dwarf_old_locations[i] = 18
+    state.object_locations[AXE] = state.current_room
+    return world.messages.get(
+        3,
+        "A little dwarf just walked around a corner, saw you, "
+        "threw a little axe at you which missed, cursed, and ran away.",
+    )
+
+
+def _move_single_dwarf(
+    world: World,
+    state: GameState,
+    i: int,
+) -> tuple[int, bool]:
+    """Move dwarf *i*, update awareness, return (attack_count, hit).
+
+    Returns (1, True) if the dwarf attacks and lands a hit,
+    (1, False) for a miss, (0, False) if no attack.
+    """
+    loc = state.dwarf_locations[i]
+    old_loc = state.dwarf_old_locations[i]
+
+    candidates = _dwarf_valid_destinations(world, loc, old_loc)
+    new_room = random.choice(candidates) if candidates else old_loc
+
+    state.dwarf_old_locations[i] = loc
+    state.dwarf_locations[i] = new_room
+
+    if state.current_room in (new_room, loc):
+        state.dwarf_seen[i] = True
+    elif state.current_room < 15:
+        state.dwarf_seen[i] = False
+
+    if not state.dwarf_seen[i]:
+        return 0, False
+
+    state.dwarf_locations[i] = state.current_room
+
+    if state.current_room == loc:
+        state.knife_location = state.current_room
+        hit = random.random() < 0.095 * (state.dwarf_stage - 2)
+        return 1, hit
+    return 0, False
+
+
+def _report_dwarf_attacks(
+    world: World,
+    state: GameState,
+    parts: list[str],
+    dwarf_count: int,
+    dwarf_attacks: int,
+    knife_wounds: int,
+) -> None:
+    """Append dwarf presence/attack messages to *parts*."""
+    if dwarf_count == 1:
+        parts.append(
+            world.messages.get(
+                4,
+                "There is a threatening little dwarf in the room with you!",
+            )
+        )
+    elif dwarf_count > 1:
+        parts.append(
+            f"There are {dwarf_count} threatening little dwarves in the room with you!",
+        )
+
+    if dwarf_attacks and state.dwarf_stage == 2:
+        state.dwarf_stage = 3
+
+    if dwarf_attacks == 1:
+        parts.append(
+            world.messages.get(
+                5,
+                "One sharp nasty knife is thrown at you!",
+            )
+        )
+        msg_n = 53 if knife_wounds else 52
+        parts.append(
+            world.messages.get(
+                msg_n,
+                "It gets you!" if knife_wounds else "It misses!",
+            )
+        )
+    elif dwarf_attacks > 1:
+        parts.append(f"{dwarf_attacks} of them throw knives at you!")
+        if knife_wounds:
+            if knife_wounds == 1:
+                parts.append(world.messages.get(7, "One of them gets you!"))
+            else:
+                parts.append(f"{knife_wounds} of them get you!")
+        else:
+            parts.append(world.messages.get(6, "None of them hit you!"))
+
+    if knife_wounds:
+        parts.append(_cmd_die(world, state))
+
+
+def _tick_dwarves(world: World, state: GameState) -> str | None:
+    """Per-turn dwarf and pirate AI.  Returns message text or None."""
+    if state.is_closing or state.is_closed:
+        return None
+
+    room = world.rooms.get(state.current_room)
+    if room is None:
+        return None
+    if room.travel_table and room.travel_table[0].is_forced:
+        return None
+
+    if state.dwarf_stage == 1:
+        return _dwarf_first_encounter(world, state)
+    if state.dwarf_stage < 2:
+        return None
+
+    parts: list[str] = []
+    dwarf_count = 0
+    dwarf_attacks = 0
+    knife_wounds = 0
+
+    for i in range(len(state.dwarf_locations)):
+        attacks, hit = _move_single_dwarf(world, state, i)
+        if state.dwarf_seen[i]:
+            dwarf_count += 1
+        dwarf_attacks += attacks
+        knife_wounds += int(hit)
+
+    _tick_pirate(world, state, parts)
+    _report_dwarf_attacks(
+        world,
+        state,
+        parts,
+        dwarf_count,
+        dwarf_attacks,
+        knife_wounds,
+    )
+
+    return "\n\n".join(parts) if parts else None
+
+
+def _pirate_no_treasure(
+    world: World,
+    state: GameState,
+    parts: list[str],
+    old_loc: int,
+    loc: int,
+) -> bool:
+    """Handle pirate when player carries no treasure.
+
+    Returns True if the pirate acts (shiver-me-timbers), False otherwise.
+    """
+    treasure_here = any(
+        state.object_locations.get(obj_id) == state.current_room
+        for obj_id, obj in world.objects.items()
+        if obj.is_treasure
+    )
+    impossible_treasures = sum(
+        1
+        for obj_id, obj in world.objects.items()
+        if obj.is_treasure and state.object_locations.get(obj_id) == DESTROYED
+    )
+    chest_placed = state.object_locations.get(CHEST, DESTROYED) != DESTROYED
+    lamp_here = state.object_locations.get(LAMP) in (
+        CARRIED,
+        state.current_room,
+    )
+    one_left = state.treasures_not_found == impossible_treasures + 1
+    shiver = (
+        one_left
+        and not treasure_here
+        and not chest_placed
+        and lamp_here
+        and state.lamp_on
+    )
+    if not shiver:
+        if old_loc != loc and random.random() < 0.2:
+            parts.append(
+                world.messages.get(
+                    127,
+                    "There are faint rustling noises from the darkness behind you.",
+                )
+            )
+        return False
+    parts.append(
+        world.messages.get(
+            186,
+            "Your lamp flickers... a bearded pirate is here, "
+            'carrying a large chest. "Shiver me timbers!" he cries.',
+        )
+    )
+    state.object_locations[CHEST] = CHEST_ROOM
+    state.object_props[CHEST] = 0
+    state.object_locations[MESSAGE] = PIRATE_MSG_ROOM
+    return True
+
+
+def _move_pirate(world: World, state: GameState) -> bool:
+    """Move the pirate and update awareness. Return True if pirate is here."""
+    loc = state.pirate_location
+    old_loc = state.pirate_old_location
+
+    candidates = _dwarf_valid_destinations(world, loc, old_loc)
+    candidates = [
+        r
+        for r in candidates
+        if not world.rooms.get(r, world.rooms[1]).is_forbidden_to_pirate
+    ]
+    new_room = random.choice(candidates) if candidates else old_loc
+
+    state.pirate_old_location = loc
+    state.pirate_location = new_room
+
+    if state.current_room in (new_room, loc):
+        state.pirate_seen = True
+    elif state.current_room < 15:
+        state.pirate_seen = False
+
+    if not state.pirate_seen:
+        return False
+
+    state.pirate_location = state.current_room
+    return True
+
+
+def _tick_pirate(
+    world: World,
+    state: GameState,
+    parts: list[str],
+) -> None:
+    """Run pirate movement and theft logic, appending messages to *parts*."""
+    if state.pirate_location == 0:
+        return
+    if not _move_pirate(world, state):
+        return
+
+    # If player is in chest room or chest already found, pirate hides
+    if state.current_room == CHEST_ROOM or state.object_props.get(CHEST, -1) >= 0:
+        return
+
+    # Gather treasures the player is carrying
+    old_loc = state.pirate_old_location
+    loc = state.pirate_location
+    treasures = [
+        obj_id
+        for obj_id, obj in world.objects.items()
+        if obj.is_treasure and state.object_locations.get(obj_id) == CARRIED
+    ]
+    if PLATINUM in treasures and state.current_room in (100, 101):
+        treasures.remove(PLATINUM)
+
+    if not treasures:
+        if not _pirate_no_treasure(world, state, parts, old_loc, loc):
+            return
+    else:
+        # Pirate steals all carried treasures
+        parts.append(
+            world.messages.get(
+                128,
+                "Out from the shadows behind you pounces a bearded pirate! "
+                '"Har, har," he chortles. "I\'ll just take all this booty '
+                'and hide it away with me chest deep in the maze!"',
+            )
+        )
+        if state.object_locations.get(MESSAGE, DESTROYED) == DESTROYED:
+            state.object_locations[CHEST] = CHEST_ROOM
+            state.object_props[CHEST] = 0
+            state.object_locations[MESSAGE] = PIRATE_MSG_ROOM
+        for t in treasures:
+            state.object_locations[t] = CHEST_ROOM
+
+    # Pirate retreats to chest room
+    state.pirate_old_location = CHEST_ROOM
+    state.pirate_location = CHEST_ROOM
+    state.pirate_seen = False
+
+
+def _is_dwarf_blocking(state: GameState, dest: int) -> bool:
+    """Check if a seen dwarf blocks the player from entering *dest*."""
+    for i, loc in enumerate(state.dwarf_locations):
+        if loc == dest and state.dwarf_seen[i]:
+            return True
+    return False
+
+
 def _dispatch_verb(
-    world: World, state: GameState, verb: str, noun: str | None,
+    world: World,
+    state: GameState,
+    verb: str,
+    noun: str | None,
 ) -> str | None:
     """Try to dispatch verb as a motion word, action verb, or noun shortcut."""
     if _is_motion_word(world, verb):
@@ -338,10 +686,7 @@ def get_room_description(world: World, state: GameState) -> str:
         return "You are in a mysterious place."
 
     if _is_dark(world, state):
-        return (
-            "It is now pitch dark. If you proceed you will "
-            "likely fall into a pit."
-        )
+        return "It is now pitch dark. If you proceed you will likely fall into a pit."
 
     if (
         state.current_room in state.visited_rooms
@@ -379,9 +724,18 @@ def get_visible_objects(world: World, state: GameState) -> list[str]:
 def _direction_verb_map(world: World) -> dict[int, str]:
     """Map vocabulary verb numbers to display names for compass directions."""
     labels = {
-        "n": "North", "s": "South", "e": "East", "w": "West",
-        "u": "Up", "d": "Down", "in": "In", "out": "Out",
-        "ne": "NE", "se": "SE", "sw": "SW", "nw": "NW",
+        "n": "North",
+        "s": "South",
+        "e": "East",
+        "w": "West",
+        "u": "Up",
+        "d": "Down",
+        "in": "In",
+        "out": "Out",
+        "ne": "NE",
+        "se": "SE",
+        "sw": "SW",
+        "nw": "NW",
     }
     result: dict[int, str] = {}
     for short, label in labels.items():
@@ -457,6 +811,13 @@ def _resolve_direction(world: World, direction: str) -> int | None:
 
 def _move_to(world: World, state: GameState, dest: int) -> str:
     """Move the player to dest and handle forced movement / dark death."""
+    # Dwarf blocking: a dwarf that has seen the player blocks entry
+    if _is_dwarf_blocking(state, dest):
+        return world.messages.get(
+            2,
+            "A little dwarf with a big knife blocks your way.",
+        )
+
     state.old_old_room = state.old_room
     state.old_room = state.current_room
     state.current_room = dest
@@ -469,7 +830,22 @@ def _move_to(world: World, state: GameState, dest: int) -> str:
     if _is_dark(world, state) and random.random() < 0.35:
         return _cmd_die(world, state)
 
-    return get_room_description(world, state)
+    # Activate dwarf stage 0 → 1 on first entry into deep cave
+    is_dwarf_area = (
+        new_room is not None and not new_room.is_forbidden_to_pirate and dest >= 15
+    )
+    if is_dwarf_area and state.dwarf_stage == 0:
+        state.dwarf_stage = 1
+
+    description = get_room_description(world, state)
+
+    # Run dwarf / pirate AI tick
+    if state.dwarf_stage > 0:
+        dwarf_msg = _tick_dwarves(world, state)
+        if dwarf_msg:
+            description = description + "\n\n" + dwarf_msg
+
+    return description
 
 
 def _handle_forced(world: World, state: GameState, room) -> str:
@@ -491,22 +867,35 @@ def _handle_forced(world: World, state: GameState, room) -> str:
                 and next_room.travel_table
                 and next_room.travel_table[0].is_forced
             ):
-                return msg + "\n\n" + _handle_forced(
-                    world, state, next_room,
+                return (
+                    msg
+                    + "\n\n"
+                    + _handle_forced(
+                        world,
+                        state,
+                        next_room,
+                    )
                 )
             return msg + "\n\n" + get_room_description(world, state)
         if dest < 0:
             return world.messages.get(-dest, "")
         if 301 <= dest <= 500:
-            return msg + "\n\n" + _handle_special_movement(
-                world, state, dest,
+            return (
+                msg
+                + "\n\n"
+                + _handle_special_movement(
+                    world,
+                    state,
+                    dest,
+                )
             )
         break
     return msg
 
 
 def _check_closing_block(
-    state: GameState, direction: str,
+    state: GameState,
+    direction: str,
 ) -> str | None:
     """Block magic words during cave closing."""
     if not state.is_closing:
@@ -514,8 +903,8 @@ def _check_closing_block(
     norm = _normalize_word(direction.lower())
     if norm in ("xyzzy", "plugh"):
         return (
-            'A mysterious recorded voice groans into life '
-            'and announces:\n'
+            "A mysterious recorded voice groans into life "
+            "and announces:\n"
             '   "This exit is closed.  Please leave via '
             'main office."'
         )
@@ -523,7 +912,10 @@ def _check_closing_block(
 
 
 def _walk_travel_table(
-    world: World, state: GameState, room, verb_n: int,
+    world: World,
+    state: GameState,
+    room,
+    verb_n: int,
 ) -> str | None:
     """Walk the travel table for the given verb and return response."""
     for move in room.travel_table:
@@ -563,9 +955,7 @@ def _cmd_go(world: World, state: GameState, direction: str) -> str:
     if blocked:
         return blocked
 
-    return _walk_travel_table(world, state, room, verb_n) or (
-        "You can't go that way."
-    )
+    return _walk_travel_table(world, state, room, verb_n) or ("You can't go that way.")
 
 
 def _check_condition(world: World, state: GameState, condition: tuple) -> bool:
@@ -688,7 +1078,9 @@ def _take_special(state: GameState, obj_n: int) -> str | None:
 
 
 def _take_from_liquid_source(
-    world: World, state: GameState, obj_n: int,
+    world: World,
+    state: GameState,
+    obj_n: int,
 ) -> str | None:
     """Take water/oil from a room liquid source. Returns message or None."""
     if obj_n not in (WATER, OIL):
@@ -779,8 +1171,7 @@ def _cmd_drop(world: World, state: GameState, noun: str | None = None) -> str:
     # Special: dropping bear at troll
     if obj_n == BEAR:
         if _is_at(state, TROLL, state.current_room) or (
-            state.current_room in (117, 122)
-            and state.object_props.get(TROLL, 0) == 1
+            state.current_room in (117, 122) and state.object_props.get(TROLL, 0) == 1
         ):
             # Bear scares troll away
             state.object_locations[BEAR] = state.current_room
@@ -804,8 +1195,7 @@ def _cmd_drop(world: World, state: GameState, noun: str | None = None) -> str:
         state.object_props[VASE] = 2  # broken
         state.object_locations[VASE] = state.current_room
         return (
-            "The vase drops with a delicate crash and shatters into "
-            "a thousand pieces."
+            "The vase drops with a delicate crash and shatters into a thousand pieces."
         )
 
     state.object_locations[obj_n] = state.current_room
@@ -990,9 +1380,7 @@ def _cmd_pour(world: World, state: GameState, noun: str | None = None) -> str:
             state.object_props[PLANT] = prop + 2
             state.object_props[PLANT2] = prop + 2  # mirror plant2 state
             if prop == 0:
-                return (
-                    "The plant spurts into furious growth for a few seconds."
-                )
+                return "The plant spurts into furious growth for a few seconds."
             return "The plant grows explosively."
         return "Your bottle is now empty."
 
@@ -1049,18 +1437,35 @@ def _cmd_throw(world: World, state: GameState, noun: str | None = None) -> str:
     if not _is_carrying(state, obj_n):
         return "You aren't carrying it!"
 
-    # Throwing axe at dwarf
+    # Throwing axe — check for dwarves first
     if obj_n == AXE:
+        dwarves_here = [
+            i
+            for i, loc in enumerate(state.dwarf_locations)
+            if loc == state.current_room
+        ]
         state.object_locations[AXE] = state.current_room
+        if dwarves_here:
+            target = random.choice(dwarves_here)
+            if random.choice([True, False, False]):  # 1/3 kill chance
+                state.dwarf_locations.pop(target)
+                state.dwarf_old_locations.pop(target)
+                state.dwarf_seen.pop(target)
+                state.dwarf_killed += 1
+                msg_n = 149 if state.dwarf_killed == 1 else 47
+                return world.messages.get(
+                    msg_n,
+                    "You killed a little dwarf.",
+                )
+            return world.messages.get(
+                48,
+                "You attack a little dwarf, but he dodges out of the way.",
+            )
         return "The axe bounces harmlessly off a wall and falls to the ground."
 
     # Throwing treasure at troll
-    troll_here = (
-        _is_at(state, TROLL, state.current_room)
-        or (
-            _is_at(state, TROLL, 117)
-            and state.current_room in (117, 122)
-        )
+    troll_here = _is_at(state, TROLL, state.current_room) or (
+        _is_at(state, TROLL, 117) and state.current_room in (117, 122)
     )
     if troll_here:
         obj = world.objects.get(obj_n)
@@ -1069,10 +1474,7 @@ def _cmd_throw(world: World, state: GameState, noun: str | None = None) -> str:
             state.object_props[TROLL] = 2
             state.object_locations[TROLL] = DESTROYED
             state.object_props[CHASM] = 0
-            fallback = (
-                "The troll catches your treasure "
-                "and scurries away out of sight."
-            )
+            fallback = "The troll catches your treasure and scurries away out of sight."
             return world.messages.get(159, fallback)
 
     # Default: just drop it
@@ -1111,9 +1513,9 @@ _ATTACK_HANDLERS: dict[int, Callable] = {
     DRAGON: _attack_dragon,
     SNAKE: lambda _: "Attacking the snake both doesn't work and is very dangerous.",
     BIRD: _attack_bird,
+    DWARF: lambda _: "With what? Your bare hands?",
     TROLL: lambda _: (
-        "Trolls are close relatives with the rocks "
-        "and have skin as tough as stone."
+        "Trolls are close relatives with the rocks and have skin as tough as stone."
     ),
     BEAR: _attack_bear,
 }
@@ -1148,6 +1550,9 @@ def _feed_bear(state: GameState) -> str:
 
 _FEED_HANDLERS: dict[int, Callable] = {
     BIRD: lambda _: "It's not hungry (it's merely pstrp).",
+    DWARF: lambda _: (
+        "You fool, dwarves eat only coal! Now you've made him *really* mad!!"
+    ),
     DRAGON: lambda _: "There's nothing here it wants to eat (strstrstr...).",
     SNAKE: _feed_snake,
     TROLL: lambda _: "Gluttony is not one of the tstrstrstr...",
@@ -1372,8 +1777,10 @@ def _cmd_blast(world: World, state: GameState, noun: str | None = None) -> str:
 
 def _static_response(msg: str):
     """Return a handler that ignores all arguments and returns a fixed message."""
+
     def handler(world: World, state: GameState, noun: str | None = None) -> str:
         return msg
+
     return handler
 
 
@@ -1405,7 +1812,5 @@ _VERB_DISPATCH: dict[str, Callable] = {
     **dict.fromkeys(("blast", "deton", "ignit", "blowu"), _cmd_blast),
     "swim": _static_response("I don't know how."),
     "nothi": _static_response("OK."),
-    "save": _static_response(
-        "Your game is automatically saved after each move."
-    ),
+    "save": _static_response("Your game is automatically saved after each move."),
 }

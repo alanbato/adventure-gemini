@@ -8,12 +8,16 @@ from adventure.engine.commands import (
     handle_command,
 )
 from adventure.engine.state import (
+    AXE,
     CARRIED,
     CHEST,
+    CHEST_ROOM,
+    DWARF,
     GRATE,
     KEYS,
     LAMP,
     MAGAZINE,
+    NUGGET,
     new_game_state,
 )
 from adventure.engine.world import World
@@ -195,7 +199,7 @@ def test_score_dwarves_bonus(world: World):
     """Activating dwarves gives 25 points."""
     state = new_game_state(world)
     base = calculate_score(world, state)
-    state.dwarves_active = True
+    state.dwarf_stage = 1
     assert calculate_score(world, state) == base + 25
 
 
@@ -243,3 +247,204 @@ def test_score_hint_penalty(world: World):
     penalty = world.hints[hint_n].penalty
     state.hints_given.add(hint_n)
     assert calculate_score(world, state) == base - penalty
+
+
+# --- Dwarf / pirate AI tests ---
+
+
+def _enter_deep_cave(world, state):
+    """Move player into deep cave (room 15+) to activate dwarf stage."""
+    state.current_room = 15
+    state.old_room = 15
+    state.visited_rooms.add(15)
+    state.lamp_on = True
+    state.object_props[LAMP] = 1
+    state.object_locations[LAMP] = CARRIED
+
+
+def test_dwarf_stage_activation(world: World):
+    """Entering room >= 15 activates dwarf stage 0 → 1."""
+    import random as _random
+
+    state = new_game_state(world)
+    assert state.dwarf_stage == 0
+
+    # Seed random to avoid dark-death and first-encounter rolls
+    _random.seed(42)
+    state.object_locations[LAMP] = CARRIED
+    state.lamp_on = True
+    state.object_props[LAMP] = 1
+    state.current_room = 14
+    state.old_room = 14
+
+    # Move to room 15 via _move_to (through handle_command w/ motion word)
+    from adventure.engine.commands import _move_to
+
+    _move_to(world, state, 15)
+    assert state.dwarf_stage == 1
+
+
+def test_dwarf_first_encounter(world: World):
+    """Stage 1 → 2 transition drops axe and shows message."""
+    import random as _random
+
+    state = new_game_state(world)
+    _enter_deep_cave(world, state)
+    state.dwarf_stage = 1
+
+    # Seed so that random() >= 0.95 triggers encounter
+    _random.seed(0)
+    # Find a seed where random() >= 0.95
+    for seed in range(1000):
+        _random.seed(seed)
+        if _random.random() >= 0.95:
+            # Re-seed and run the tick
+            _random.seed(seed)
+            from adventure.engine.commands import _tick_dwarves
+
+            result = _tick_dwarves(world, state)
+            assert result is not None
+            assert state.dwarf_stage == 2
+            assert state.object_locations[AXE] == state.current_room
+            break
+    else:
+        raise AssertionError("Could not find seed for first encounter")
+
+
+def test_axe_throw_kills_dwarf(world: World):
+    """Throwing axe at dwarf with lucky roll kills it."""
+    from unittest.mock import patch
+
+    state = new_game_state(world)
+    _enter_deep_cave(world, state)
+    state.dwarf_stage = 2
+
+    # Place a dwarf in the player's room
+    state.dwarf_locations = [state.current_room]
+    state.dwarf_old_locations = [state.current_room]
+    state.dwarf_seen = [True]
+    state.object_locations[AXE] = CARRIED
+
+    # random.choice is called twice: first to pick target index,
+    # then to roll kill/miss. Side effect returns index 0, then True.
+    with patch(
+        "adventure.engine.commands.random.choice",
+        side_effect=[0, True],
+    ):
+        result = handle_command(world, state, "throw axe")
+    assert state.dwarf_killed == 1
+    assert len(state.dwarf_locations) == 0
+    assert "KILLED" in result.upper() or "killed" in result.lower()
+
+
+def test_axe_throw_misses_dwarf(world: World):
+    """Throwing axe at dwarf with unlucky roll misses."""
+    from unittest.mock import patch
+
+    state = new_game_state(world)
+    _enter_deep_cave(world, state)
+    state.dwarf_stage = 2
+
+    state.dwarf_locations = [state.current_room]
+    state.dwarf_old_locations = [state.current_room]
+    state.dwarf_seen = [True]
+    state.object_locations[AXE] = CARRIED
+
+    with patch(
+        "adventure.engine.commands.random.choice",
+        side_effect=[0, False],
+    ):
+        result = handle_command(world, state, "throw axe")
+    assert state.dwarf_killed == 0
+    assert len(state.dwarf_locations) == 1
+    assert "DODGE" in result.upper() or "dodge" in result.lower()
+
+
+def test_pirate_steals_treasure(world: World):
+    """Pirate steals carried treasures to chest room."""
+    state = new_game_state(world)
+    _enter_deep_cave(world, state)
+    state.dwarf_stage = 2
+    state.dwarf_locations = []
+    state.dwarf_old_locations = []
+    state.dwarf_seen = []
+
+    # Place pirate in the player's room and mark as seen
+    state.pirate_location = state.current_room
+    state.pirate_old_location = state.current_room
+    state.pirate_seen = True
+
+    # Give player a treasure (gold nugget)
+    state.object_locations[NUGGET] = CARRIED
+
+    from adventure.engine.commands import _tick_pirate
+
+    parts: list[str] = []
+    _tick_pirate(world, state, parts)
+
+    assert state.object_locations[NUGGET] == CHEST_ROOM
+    assert state.object_locations[CHEST] == CHEST_ROOM
+    assert state.pirate_location == CHEST_ROOM
+    assert len(parts) > 0
+
+    # Player can travel to room 64 and recover the stolen treasure
+    state.pirate_location = 0  # disable pirate so it doesn't interfere
+    state.current_room = CHEST_ROOM
+    state.old_room = CHEST_ROOM
+    state.visited_rooms.add(CHEST_ROOM)
+
+    result = handle_command(world, state, "get chest")
+    assert state.object_locations[CHEST] == CARRIED
+
+    result = handle_command(world, state, "get nugget")
+    assert state.object_locations[NUGGET] == CARRIED
+
+
+def test_dwarves_cleared_on_closing(world: World):
+    """Cave closing removes all dwarves and pirate."""
+    state = new_game_state(world)
+    state.dwarf_stage = 2
+    state.dwarf_locations = [19, 27, 33]
+    state.dwarf_old_locations = [19, 27, 33]
+    state.dwarf_seen = [False, False, False]
+    state.pirate_location = 64
+
+    from adventure.engine.commands import _start_closing
+
+    _start_closing(world, state)
+
+    assert state.dwarf_locations == []
+    assert state.dwarf_seen == []
+    assert state.dwarf_stage == 0
+    assert state.pirate_location == 0
+
+
+def test_attack_dwarf_bare_hands(world: World):
+    """Attacking a dwarf bare-handed fails."""
+    state = new_game_state(world)
+    _enter_deep_cave(world, state)
+    state.dwarf_stage = 2
+    state.dwarf_locations = []
+    state.dwarf_old_locations = []
+    state.dwarf_seen = []
+    state.pirate_location = 0
+
+    # Place dwarf object at current room for noun resolution
+    state.object_locations[DWARF] = state.current_room
+    result = handle_command(world, state, "attack dwarf")
+    assert "bare hands" in result.lower()
+
+
+def test_feed_dwarf(world: World):
+    """Feeding a dwarf gives the coal message."""
+    state = new_game_state(world)
+    _enter_deep_cave(world, state)
+    state.dwarf_stage = 2
+    state.dwarf_locations = []
+    state.dwarf_old_locations = []
+    state.dwarf_seen = []
+    state.pirate_location = 0
+
+    state.object_locations[DWARF] = state.current_room
+    result = handle_command(world, state, "feed dwarf")
+    assert "coal" in result.lower()

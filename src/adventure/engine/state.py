@@ -44,6 +44,7 @@ BEAR = 35
 CHAIN = 64
 VASE = 58
 EMERALD = 59
+MESSAGE = 36  # "message in a bottle" object (pirate hint item)
 PLANT = 24
 PLANT2 = 25
 BATTERIES = 39
@@ -58,6 +59,10 @@ LAMP_LIFE = 330
 
 # Dwarf starting positions (rooms)
 DWARF_START_LOCATIONS = [19, 27, 33, 44, 64]
+
+# Pirate stash locations
+CHEST_ROOM = 64  # Dead end where pirate deposits stolen treasures
+PIRATE_MSG_ROOM = 140  # Room for pirate message/hint object
 
 
 @dataclass
@@ -92,13 +97,18 @@ class GameState:
     visited_rooms: set[int] = field(default_factory=set)
     is_finished: bool = False
 
-    # Dwarf state
+    # Dwarf state: stage 0=dormant, 1=armed, 2=active, 3=aggressive
+    dwarf_stage: int = 0
     dwarf_locations: list[int] = field(default_factory=list)
     dwarf_old_locations: list[int] = field(default_factory=list)
-    pirate_location: int = 0
+    dwarf_seen: list[bool] = field(default_factory=list)
     dwarf_killed: int = 0
     knife_location: int = 0
-    dwarves_active: bool = False
+
+    # Pirate state
+    pirate_location: int = 0
+    pirate_old_location: int = 0
+    pirate_seen: bool = False
 
     # Hint tracking
     hint_turns: dict[int, int] = field(default_factory=dict)
@@ -122,6 +132,11 @@ class GameState:
     # Count of treasures not yet seen (prop still < 0 / not in object_props)
     treasures_not_found: int = 15
 
+    @property
+    def dwarves_active(self) -> bool:
+        """Backward-compatible alias: True when dwarf_stage > 0."""
+        return self.dwarf_stage > 0
+
 
 def new_game_state(world: World) -> GameState:
     """Create a fresh game state with objects in their starting positions."""
@@ -141,6 +156,8 @@ def new_game_state(world: World) -> GameState:
     # Initialize dwarves at their starting locations
     state.dwarf_locations = DWARF_START_LOCATIONS.copy()
     state.dwarf_old_locations = DWARF_START_LOCATIONS.copy()
-    state.pirate_location = 0  # pirate not yet active
+    state.dwarf_seen = [False] * len(DWARF_START_LOCATIONS)
+    state.pirate_location = CHEST_ROOM
+    state.pirate_old_location = CHEST_ROOM
 
     return state
