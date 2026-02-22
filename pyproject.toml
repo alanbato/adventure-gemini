@@ -1,6 +1,6 @@
 [project]
 name = "adventure-gemini"
-version = "0.1.0"
+version = "0.1.1"
 description = "Colossal Cave Adventure over Gemini"
 readme = "README.md"
 authors = [
