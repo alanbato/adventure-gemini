@@ -1,5 +1,5 @@
 [project]
-name = "adventure"
+name = "adventure-gemini"
 version = "0.1.0"
 description = "Colossal Cave Adventure over Gemini"
 readme = "README.md"
