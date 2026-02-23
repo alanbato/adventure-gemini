@@ -3,8 +3,8 @@ revision = 3
 requires-python = ">=3.13"
 
 [[package]]
-name = "adventure"
-version = "0.1.0"
+name = "adventure-gemini"
+version = "0.1.3"
 source = { editable = "." }
 dependencies = [
     { name = "nauyaca", extra = ["reload"] },

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session, SQLModel, create_engine
 
+from adventure.app import _get_data_path, create_app
 from adventure.config import Config
 from adventure.engine.loader import load_world
 from adventure.engine.world import World
@@ -12,13 +13,8 @@ from adventure.models import Player
 
 
 @pytest.fixture
-def data_dir() -> Path:
-    return Path(__file__).parent.parent / "data"
-
-
-@pytest.fixture
-def world(data_dir: Path) -> World:
-    return load_world(data_dir / "advent.dat")
+def world() -> World:
+    return load_world(_get_data_path())
 
 
 @pytest.fixture
@@ -50,17 +46,8 @@ def test_config(tmp_path: Path) -> Config:
 
 
 @pytest.fixture
-def app(test_config: Config, data_dir: Path):
-    import adventure.app as app_module
-    from adventure.app import create_app
-
-    original = app_module.DATA_DIR
-    app_module.DATA_DIR = data_dir
-    try:
-        a = create_app(test_config)
-        return a
-    finally:
-        app_module.DATA_DIR = original
+def app(test_config: Config):
+    return create_app(test_config)
 
 
 @pytest.fixture

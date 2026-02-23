@@ -1,5 +1,6 @@
 """Xitzin application factory for Adventure."""
 
+from importlib import resources
 from pathlib import Path
 
 from sqlmodel import Session, SQLModel, create_engine
@@ -11,7 +12,10 @@ from .logging import get_logger
 
 logger = get_logger(__name__)
 
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
+
+def _get_data_path() -> Path:
+    """Locate advent.dat via importlib.resources (works when installed in a venv)."""
+    return resources.files("adventure.data").joinpath("advent.dat")
 
 
 def create_app(config: Config | None = None) -> Xitzin:
@@ -36,7 +40,7 @@ def create_app(config: Config | None = None) -> Xitzin:
         SQLModel.metadata.create_all(engine)
         logger.debug("database_setup_complete")
 
-        data_path = DATA_DIR / "advent.dat"
+        data_path = _get_data_path()
         app.state.world = load_world(data_path)
         logger.info(
             "world_loaded",
