@@ -8,9 +8,16 @@ def test_home_page(client):
     assert "Adventure" in response.body
 
 
-def test_play_requires_cert(client):
-    """Play page requires a client certificate."""
+def test_play_redirects_without_cert(client):
+    """Play page redirects to /?register without a certificate."""
     response = client.get("/play")
+    assert response.is_redirect
+    assert response.meta == "/?register"
+
+
+def test_register_requires_cert(client):
+    """The /?register endpoint requires a client certificate."""
+    response = client.get("/?register")
     assert response.is_certificate_required
 
 

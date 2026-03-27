@@ -47,9 +47,10 @@ def _register_action_routes(app: Xitzin) -> None:
     """Register command and movement routes."""
 
     @app.gemini("/play", name="play")
-    @require_certificate
     def play(request: Request):
         """Main game view."""
+        if not request.client_cert_fingerprint:
+            return Redirect("/?register")
         with _game_session(request) as game:
             game.save()
             return _render_play(app, game)

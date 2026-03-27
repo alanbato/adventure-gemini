@@ -1,6 +1,7 @@
 """Home, help, and about routes."""
 
-from xitzin import Request, Xitzin
+from xitzin import Redirect, Request, Xitzin
+from xitzin.auth import require_certificate
 
 
 def register_routes(app: Xitzin) -> None:
@@ -8,7 +9,14 @@ def register_routes(app: Xitzin) -> None:
 
     @app.gemini("/", name="home")
     def home(request: Request):
+        if request.query == "register":
+            # Activate the client certificate at root scope, then redirect.
+            return _activate_cert(request)
         return app.template("home.gmi")
+
+    @require_certificate
+    def _activate_cert(request: Request):
+        return Redirect("/play")
 
     @app.gemini("/help", name="help")
     def help_page(request: Request):
